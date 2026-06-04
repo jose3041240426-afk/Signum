@@ -1,0 +1,119 @@
+INSTRUCCIONES PARA EJECUTAR EL PROYECTO LSM
+=============================================
+
+PREREQUISITOS
+-------------
+
+- Python 3.10 o superior (recomendado: 3.10 - 3.11)
+- Node.js 18 o superior (recomendado: 18.x o 20.x LTS)
+- Git
+
+ESTRUCTURA DEL PROYECTO
+-----------------------
+
+- backend/          -> API en Python con FastAPI
+- frontend/         -> Aplicación web en Next.js
+- datos_lsm/        -> Datos de entrenamiento de letras
+- datos_palabras/   -> Datos de entrenamiento de palabras
+- modelo_lsm.pkl    -> Modelo entrenado de letras (se genera al entrenar)
+- modelo_palabras.pkl -> Modelo entrenado de palabras (se genera al entrenar)
+
+INSTALACIÓN Y CONFIGURACIÓN
+============================
+
+1. CLONAR EL REPOSITORIO
+
+   git clone https://github.com/USUARIO/REPO.git
+   cd REPO
+
+2. CREAR Y ACTIVAR EL ENTORNO VIRTUAL DE PYTHON
+
+   Windows:
+       python -m venv venv
+       venv\Scripts\activate
+
+   Linux/Mac:
+       python3 -m venv venv
+       source venv/bin/activate
+
+3. INSTALAR DEPENDENCIAS DE PYTHON
+
+   Con el entorno virtual activado, ejecuta:
+
+       pip install -r requirements.txt
+
+   Esto instalará todas las librerías necesarias para el backend:
+
+   - numpy            -> Cálculos numéricos y manejo de arrays
+   - opencv-python    -> Captura y procesamiento de video (cámara)
+   - mediapipe        -> Detección de landmarks de manos en tiempo real
+   - fastapi          -> Framework para la API REST
+   - uvicorn          -> Servidor ASGI para ejecutar FastAPI
+   - pydantic         -> Validación de datos y modelos
+   - gtts             -> Texto a voz (Google Text-to-Speech)
+   - scikit-learn     -> Entrenamiento del modelo de letras (Random Forest)
+   - tensorflow       -> Entrenamiento del modelo de palabras (LSTM con Keras)
+   - python-multipart -> Soporte para subida de archivos en FastAPI
+
+4. INSTALAR DEPENDENCIAS DEL FRONTEND
+
+   En una terminal, ve a la carpeta frontend e instala los paquetes de Node.js:
+
+       cd frontend
+       npm install
+
+   Esto descarga todas las dependencias listadas en package.json:
+
+   - next                        -> Framework React para la aplicación web
+   - react / react-dom           -> Librerías de interfaz de usuario
+   - @mediapipe/holistic         -> Soluciones de MediaPipe para el navegador
+   - @mediapipe/tasks-vision     -> Tareas de visión de MediaPipe
+   - tailwindcss                 -> Framework de estilos CSS
+   - typescript                  -> Tipado estático para JavaScript
+   - eslint                      -> Linter de código
+
+EJECUCIÓN DEL PROYECTO
+=======================
+
+1. INICIAR EL SERVIDOR BACKEND (FastAPI)
+
+   Con el entorno virtual activado, ejecuta en la raíz del proyecto:
+
+       uvicorn backend.app.main:app --reload --reload-dir backend --port 8000
+
+   O alternativamente:
+
+       python -m uvicorn backend.app.main:app --reload --reload-dir backend --port 8000
+
+   IMPORTANTE: El flag --reload-dir backend es necesario para que el watcher
+   solo vigile la carpeta backend. Sin él, uvicorn intenta vigilar TODO el
+   directorio (incluyendo venv/ y node_modules/) y se aborta en Windows.
+
+   El servidor se levantará en: http://localhost:8000
+
+2. INICIAR EL FRONTEND (Next.js)
+
+   En una nueva terminal (sin cerrar el backend), ve a la carpeta frontend:
+
+       cd frontend
+       npm run dev
+
+   El frontend se levantará en: http://localhost:3000
+
+3. USO
+
+   - Abre http://localhost:3000 en tu navegador.
+   - La cámara se activará automáticamente.
+   - El backend se conecta al frontend mediante la API en el puerto 8000.
+
+NOTAS IMPORTANTES
+-----------------
+
+- Si el modelo (modelo_lsm.pkl) no existe, el backend correrá en "modo demo".
+- Si cambias de computadora, es posible que necesites ajustar el índice de la cámara
+  (por defecto es 0, con fallback al 1).
+- Para desactivar el entorno virtual, escribe: deactivate
+- La primera vez que se ejecute el backend, el TTS (texto a voz) precargará los
+  audios de las letras en segundo plano; esto puede tomar unos segundos.
+- La carpeta 'venv/' y 'node_modules/' están ignoradas en Git (ver .gitignore).
+  Por eso es obligatorio recrear el entorno e instalar dependencias al clonar.

@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root {
+  --background: #a7c5d6;
+  --foreground: #ffffff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: linear-gradient(135deg, #4a90e2 0%, #1e3a5f 100%);
+  color: var(--foreground);
+  font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+  min-height: 100vh;
+  margin: 0;
+}

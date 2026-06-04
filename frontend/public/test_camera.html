@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Signum</title>
+  <style>
+    body { background: #111; color: #fff; font-family: sans-serif; text-align: center; padding: 2rem; }
+    video { width: 640px; border: 2px solid #a78bfa; border-radius: 12px; margin: 1rem; }
+    button { padding: 10px 20px; margin: 5px; font-size: 1rem; cursor: pointer; border-radius: 8px; border: none; color: #fff; }
+    #status { color: #a5b4fc; margin: 1rem; }
+    #log { text-align: left; background: #222; padding: 1rem; border-radius: 8px; max-width: 640px; margin: 1rem auto; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>🔍 Test de Cámara</h1>
+  <p id="status">Haz clic en un botón para probar tu cámara</p>
+
+  <div>
+    <button onclick="testSimple()" style="background:#6366f1">Test Simple</button>
+    <button onclick="testNoConstraints()" style="background:#22c55e">Sin restricciones</button>
+    <button onclick="testForced()" style="background:#f97316">Forzar formato</button>
+    <button onclick="listDevices()" style="background:#e11d48">Listar dispositivos</button>
+  </div>
+
+  <video id="vid" autoplay playsinline muted></video>
+
+  <div id="log">Esperando acción...</div>
+<button onclick="stopCurrentStream()" style="background:#6b7280;color:#fff;margin-top:10px;">Apagar Cámara</button>
+  <script>
+    const vid = document.getElementById('vid');
+    const status = document.getElementById('status');
+    const log = document.getElementById('log');
+
+    function addLog(msg) {
+      log.textContent += '\n' + msg;
+      console.log(msg);
+    }
+
+    function stopCurrentStream() {
+      if (vid.srcObject) {
+        vid.srcObject.getTracks().forEach(t => t.stop());
+        vid.srcObject = null;
+      }
+    }
+
+    // Test 1: Simple getUserMedia
+    async function testSimple() {
+      stopCurrentStream();
+      log.textContent = '=== Test Simple ===';
+      status.textContent = 'Probando...';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        vid.srcObject = stream;
+        const track = stream.getVideoTracks()[0];
+        const settings = track.getSettings();
+        addLog('✅ Stream obtenido');
+        addLog('Track label: ' + track.label);
+        addLog('Resolución: ' + settings.width + 'x' + settings.height);
+        addLog('Frame rate: ' + settings.frameRate);
+        addLog('Device ID: ' + settings.deviceId);
+        status.textContent = 'Cámara activa: ' + track.label;
+      } catch(e) {
+        addLog('❌ Error: ' + e.message);
+        status.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    // Test 2: No constraints at all
+    async function testNoConstraints() {
+      stopCurrentStream();
+      log.textContent = '=== Test Sin Restricciones ===';
+      status.textContent = 'Probando...';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        vid.srcObject = stream;
+        const track = stream.getVideoTracks()[0];
+        addLog('✅ Stream obtenido');
+        addLog('Track label: ' + track.label);
+        const settings = track.getSettings();
+        addLog('Resolución: ' + settings.width + 'x' + settings.height);
+        status.textContent = 'Cámara activa: ' + track.label;
+      } catch(e) {
+        addLog('❌ Error: ' + e.message);
+        status.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    // Test 3: Force specific pixel format
+    async function testForced() {
+      stopCurrentStream();
+      log.textContent = '=== Test Forzar Formato ===';
+      status.textContent = 'Probando con formato forzado...';
+      try {
+        // Try to force a lower resolution which often avoids green screen issues
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { exact: 320 },
+            height: { exact: 240 }
+          }
+        });
+        vid.srcObject = stream;
+        const track = stream.getVideoTracks()[0];
+        addLog('✅ Stream obtenido (320x240 forzado)');
+        addLog('Track label: ' + track.label);
+        status.textContent = 'Cámara activa (320x240): ' + track.label;
+      } catch(e) {
+        addLog('❌ Error 320x240: ' + e.message);
+        addLog('Intentando con 640x480...');
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+            }
+          });
+          vid.srcObject = stream;
+          const track = stream.getVideoTracks()[0];
+          addLog('✅ Stream obtenido (640x480)');
+          addLog('Track label: ' + track.label);
+          status.textContent = 'Cámara activa (640x480): ' + track.label;
+        } catch(e2) {
+          addLog('❌ Error 640x480: ' + e2.message);
+          status.textContent = 'Error: ' + e2.message;
+        }
+      }
+    }
+
+    // List all video devices
+    async function listDevices() {
+      log.textContent = '=== Lista de Dispositivos ===';
+      try {
+        // Need to request permission first to get labels
+        await navigator.mediaDevices.getUserMedia({ video: true }).then(s => s.getTracks().forEach(t => t.stop()));
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+        addLog('Dispositivos de video encontrados: ' + videoDevices.length);
+        videoDevices.forEach((d, i) => {
+          addLog(`  [${i}] ${d.label || 'Sin nombre'}`);
+          addLog(`      ID: ${d.deviceId.substring(0, 20)}...`);
+        });
+
+        if (videoDevices.length > 1) {
+          addLog('\nProbando cada dispositivo...');
+          for (let i = 0; i < videoDevices.length; i++) {
+            try {
+              stopCurrentStream();
+              const s = await navigator.mediaDevices.getUserMedia({
+                video: { deviceId: { exact: videoDevices[i].deviceId } }
+              });
+              vid.srcObject = s;
+              addLog(`  [${i}] ${videoDevices[i].label}: ✅ funciona`);
+              // Wait a moment to see if it shows green
+              await new Promise(r => setTimeout(r, 1000));
+            } catch(e) {
+              addLog(`  [${i}] ${videoDevices[i].label}: ❌ ${e.message}`);
+            }
+          }
+        }
+      } catch(e) {
+        addLog('❌ Error: ' + e.message);
+      }
+    }
+  </script>
+</body>
+</html>
