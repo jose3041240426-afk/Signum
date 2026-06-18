@@ -10,11 +10,12 @@ const DEFAULT_PREDICTION: PredictionData = {
   isRecording: false,
   recordingLetter: "",
   recordedSamplesCount: 0,
+  predictionMode: "letters",
   word: "",
   wordConfidence: 0,
   isRecordingWord: false,
   recordingWordName: "",
-  wordRecordedSeqCount: 0,
+  wordRecordedSamplesCount: 0,
   wordModelLoaded: false,
 };
 

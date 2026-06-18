@@ -10,11 +10,12 @@ function parsePrediction(raw: Record<string, unknown>): PredictionData {
     isRecording: Boolean(raw.is_recording),
     recordingLetter: String(raw.recording_letter ?? ""),
     recordedSamplesCount: Number(raw.recorded_samples_count ?? 0),
+    predictionMode: String(raw.prediction_mode ?? "letters"),
     word: String(raw.word ?? ""),
     wordConfidence: Number(raw.word_confidence ?? 0),
     isRecordingWord: Boolean(raw.is_recording_word),
     recordingWordName: String(raw.recording_word_name ?? ""),
-    wordRecordedSeqCount: Number(raw.word_recorded_sequences_count ?? 0),
+    wordRecordedSamplesCount: Number(raw.word_recorded_samples_count ?? 0),
     wordModelLoaded: Boolean(raw.word_model_loaded),
   };
 }

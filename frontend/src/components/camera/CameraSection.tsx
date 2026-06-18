@@ -34,9 +34,9 @@ export function catheterCameraSection({ backendStatus, cameraOn, prediction }: C
             <div className="absolute bottom-4 left-4 right-4 rounded-xl border border-orange-200 bg-orange-50 p-4 text-orange-800 shadow-lg">
               <div className="mb-2 flex items-center justify-between font-bold">
                 <span>CAPTURANDO PALABRA &apos;{prediction.recordingWordName}&apos;</span>
-                <span>{prediction.wordRecordedSeqCount}/30 Secuencias</span>
+                <span>{prediction.wordRecordedSeqCount}/3 Secuencias</span>
               </div>
-              <ProgressBar progress={prediction.wordRecordedSeqCount} total={30} />
+              <ProgressBar progress={prediction.wordRecordedSeqCount} total={3} />
             </div>
           )}
           {!prediction.modelLoaded && !prediction.isRecording && !prediction.isRecordingWord && (

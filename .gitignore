@@ -53,3 +53,8 @@ Thumbs.db
 # label_encoder_palabras.pkl
 # datos_lsm/
 # datos_palabras/
+modelo_lsm.pkl
+modelo_palabras.pkl
+label_encoder_palabras.pkl
+modelo_letras_movimiento.pkl
+label_encoder_letras_movimiento.pkl

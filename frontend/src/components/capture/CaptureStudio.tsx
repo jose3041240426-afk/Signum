@@ -91,13 +91,13 @@ export function CaptureStudio({
             </button>
           ) : (
             <button className="rounded-lg bg-orange-600 px-6 py-3 font-bold text-white transition hover:bg-orange-700" onClick={onStopWord}>
-              Detener Grabacion ({wordRecordedSeqCount}/30)
+              Detener Grabacion ({wordRecordedSeqCount}/3)
             </button>
           )}
         </div>
         {isRecordingWord && (
           <div className="mt-4">
-            <ProgressBar progress={wordRecordedSeqCount} total={30} label="Progreso de Palabra" />
+            <ProgressBar progress={wordRecordedSeqCount} total={3} label="Progreso de Palabra" />
           </div>
         )}
       </div>

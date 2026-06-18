@@ -40,15 +40,16 @@ except ImportError:
 # Paths
 DATA_DIR = os.path.join(BASE_DIR, "..", "..", "datos_lsm")
 WORDS_DATA_DIR = os.path.join(BASE_DIR, "..", "..", "datos_palabras")
+LETTERS_MOTION_DIR = os.path.join(BASE_DIR, "..", "..", "datos_letras_movimiento")
 MODEL_DIR = os.path.join(BASE_DIR, "ml")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(WORDS_DATA_DIR, exist_ok=True)
+os.makedirs(LETTERS_MOTION_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 # Word recording constants
-WORD_SEQ_LENGTH = 30
-WORD_FEATURES = 63
-WORD_SAMPLES_PER_RECORDING = 30
+LETTER_SAMPLES_PER_RECORDING = 50
+WORD_SAMPLES_PER_RECORDING = 50
 WORD_MAX_NAME_LEN = 30
 
 app = FastAPI(title="LSM Unified Capture, Training & Inference API")
@@ -124,19 +125,19 @@ class CameraManager:
         # Word Prediction State
         self.current_word = ""
         self.current_word_confidence = 0.0
-        self.word_prediction_buffer = []
 
-        # Recording State
+        # Prediction Mode — only one model runs at a time
+        self.prediction_mode = "letters"  # "letters" or "words"
+
+        # Recording State (always static, 50 samples)
         self.is_recording = False
         self.recording_letter = ""
         self.recorded_samples = []
 
-        # Word Recording State
+        # Word Recording State (static, 50 samples)
         self.is_recording_word = False
         self.recording_word_name = ""
-        self.word_sequence_buffer = []
-        self.word_recorded_sequences = []
-        self.word_frame_counter = 0
+        self.word_recorded_samples = []
 
         # MediaPipe Hands
         self.mp_hands = mp.solutions.hands
@@ -250,76 +251,77 @@ class CameraManager:
                     try:
                         datos_normalizados = normalize_landmarks(hand_landmarks)
                         self.recorded_samples.append(datos_normalizados)
-                        if len(self.recorded_samples) >= 100:
+                        if len(self.recorded_samples) >= LETTER_SAMPLES_PER_RECORDING:
                             datos_np = np.array(self.recorded_samples)
                             out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_lsm"))
                             os.makedirs(out_dir, exist_ok=True)
                             out_path = os.path.join(out_dir, f"datos_{self.recording_letter.upper()}.npy")
                             np.save(out_path, datos_np)
-                            print(f"CameraManager: Grabadas 100 muestras de '{self.recording_letter}' en {out_path}")
+                            print(f"CameraManager: Grabadas {LETTER_SAMPLES_PER_RECORDING} muestras de '{self.recording_letter}' en {out_path}")
                             self.is_recording = False
                     except Exception as e:
                         print(f"Error en grabación: {e}")
 
-                # Word sequence capture (any hand)
+                # Word capture (static, 50 samples)
                 if self.is_recording_word and self.recording_word_name and hand_idx >= 0:
                     try:
                         datos_normalizados = normalize_landmarks(hand_landmarks)
-                        self.word_sequence_buffer.append(datos_normalizados)
-                        self.word_frame_counter += 1
+                        self.word_recorded_samples.append(datos_normalizados)
 
-                        if len(self.word_sequence_buffer) >= WORD_SEQ_LENGTH:
-                            seq = np.array(self.word_sequence_buffer[-WORD_SEQ_LENGTH:])
-                            self.word_recorded_sequences.append(seq)
-                            self.word_sequence_buffer = []
-                            print(f"CameraManager: Secuencia {len(self.word_recorded_sequences)}/{WORD_SAMPLES_PER_RECORDING} capturada para '{self.recording_word_name}'")
-
-                        if len(self.word_recorded_sequences) >= WORD_SAMPLES_PER_RECORDING:
+                        if len(self.word_recorded_samples) >= WORD_SAMPLES_PER_RECORDING:
                             out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_palabras"))
                             os.makedirs(out_dir, exist_ok=True)
                             safe_name = "".join(c for c in self.recording_word_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
-                            all_seqs = np.array(self.word_recorded_sequences)
+                            datos_np = np.array(self.word_recorded_samples)
                             out_path = os.path.join(out_dir, f"palabra_{safe_name}.npy")
-                            np.save(out_path, all_seqs)
-                            print(f"CameraManager: Grabadas {WORD_SAMPLES_PER_RECORDING} secuencias de '{self.recording_word_name}' en {out_path}")
+                            np.save(out_path, datos_np)
+                            print(f"CameraManager: Grabadas {WORD_SAMPLES_PER_RECORDING} muestras de '{self.recording_word_name}' en {out_path}")
                             self.is_recording_word = False
                     except Exception as e:
                         print(f"Error en grabación de palabra: {e}")
 
-                # Prediction — keep highest confidence across hands
-                if detected and model and not self.is_recording and not self.is_recording_word:
-                    try:
-                        datos_normalizados = normalize_landmarks(hand_landmarks)
-                        pred = model.predict([datos_normalizados])[0]
-                        probs = model.predict_proba([datos_normalizados])[0]
-                        idx_max = np.argmax(probs)
-                        this_conf = float(probs[idx_max] * 100)
-                        if this_conf > conf_pred:
-                            conf_pred = this_conf
-                            letter_pred = str(pred)
-                    except Exception as e:
-                        print(f"Error en prediccion: {e}")
+                # Prediction — only run the active mode's model
+                if self.prediction_mode == "letters":
+                    if detected and model and not self.is_recording and not self.is_recording_word:
+                        try:
+                            datos_normalizados = normalize_landmarks(hand_landmarks)
+                            pred = model.predict([datos_normalizados])[0]
+                            probs = model.predict_proba([datos_normalizados])[0]
+                            idx_max = np.argmax(probs)
+                            this_conf = float(probs[idx_max] * 100)
+                            if this_conf > conf_pred:
+                                conf_pred = this_conf
+                                letter_pred = str(pred)
+                        except Exception as e:
+                            print(f"Error en prediccion: {e}")
+                    self.current_word = ""
+                    self.current_word_confidence = 0.0
 
-                # Word prediction — accumulate frames and predict sequences
-                if detected and word_model and word_label_encoder and not self.is_recording and not self.is_recording_word:
-                    try:
-                        datos_normalizados = normalize_landmarks(hand_landmarks)
-                        self.word_prediction_buffer.append(datos_normalizados)
-                        if len(self.word_prediction_buffer) >= WORD_SEQ_LENGTH:
-                            seq = np.array(self.word_prediction_buffer[-WORD_SEQ_LENGTH:]).reshape(1, WORD_SEQ_LENGTH, WORD_FEATURES)
-                            pred_word = word_model.predict(seq, verbose=0)
-                            pred_idx = np.argmax(pred_word[0])
-                            word_conf = float(pred_word[0][pred_idx] * 100)
+                elif self.prediction_mode == "words":
+                    self.current_letter = ""
+                    self.current_confidence = 0.0
+                    letter_pred = ""
+                    conf_pred = 0.0
+
+                    if detected and word_model and not self.is_recording and not self.is_recording_word:
+                        try:
+                            datos_normalizados = normalize_landmarks(hand_landmarks)
+                            pred_word = word_model.predict([datos_normalizados])[0]
+                            probs_word = word_model.predict_proba([datos_normalizados])[0]
+                            idx_max = np.argmax(probs_word)
+                            word_conf = float(probs_word[idx_max] * 100)
                             if word_conf > 30:
-                                word_name = word_label_encoder.inverse_transform([pred_idx])[0]
+                                word_name = word_label_encoder.inverse_transform([idx_max])[0]
                                 self.current_word = str(word_name)
                                 self.current_word_confidence = word_conf
                             else:
                                 self.current_word = ""
                                 self.current_word_confidence = 0.0
-                            self.word_prediction_buffer = self.word_prediction_buffer[-WORD_SEQ_LENGTH // 2:]
-                    except Exception as e:
-                        pass
+                        except Exception as e:
+                            pass
+                    else:
+                        self.current_word = ""
+                        self.current_word_confidence = 0.0
 
                 self.hand_detected = detected
                 self.current_letter = letter_pred
@@ -328,27 +330,38 @@ class CameraManager:
                 # HUD overlay on the video frame
                 if self.is_recording:
                     cv2.circle(frame, (30, 30), 8, (0, 0, 255), -1)
-                    cv2.putText(frame, f"GRABANDO '{self.recording_letter}': {len(self.recorded_samples)}/100 MUESTRAS",
+                    cv2.putText(frame, f"GRABANDO '{self.recording_letter}': {len(self.recorded_samples)}/{LETTER_SAMPLES_PER_RECORDING} MUESTRAS",
                         (48, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
-                    bar_w = int(w * (len(self.recorded_samples) / 100.0))
+                    bar_w = int(w * (len(self.recorded_samples) / LETTER_SAMPLES_PER_RECORDING))
                     cv2.rectangle(frame, (0, h - 8), (bar_w, h), (0, 0, 255), -1)
                 elif self.is_recording_word:
                     cv2.circle(frame, (30, 30), 8, (0, 165, 255), -1)
-                    seq_count = len(self.word_recorded_sequences)
-                    cv2.putText(frame, f"GRABANDO PALABRA '{self.recording_word_name}': {seq_count}/{WORD_SAMPLES_PER_RECORDING} SECS",
+                    sample_count = len(self.word_recorded_samples)
+                    cv2.putText(frame, f"GRABANDO PALABRA '{self.recording_word_name}': {sample_count}/{WORD_SAMPLES_PER_RECORDING} MUESTRAS",
                         (48, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
-                    bar_w = int(w * (seq_count / WORD_SAMPLES_PER_RECORDING))
+                    bar_w = int(w * (sample_count / WORD_SAMPLES_PER_RECORDING))
                     cv2.rectangle(frame, (0, h - 8), (bar_w, h), (0, 165, 255), -1)
                 else:
-                    if not model:
-                        cv2.putText(frame, "MODO DEMO - SIN MODELO ENTRENADO", (15, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-                    elif detected and letter_pred:
-                        cv2.putText(frame, f"LSM: {letter_pred} ({conf_pred:.1f}%)", (15, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    if self.prediction_mode == "words":
+                        if not word_model:
+                            cv2.putText(frame, "MODO DEMO - SIN MODELO DE PALABRAS", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                        elif detected and self.current_word:
+                            cv2.putText(frame, f"PALABRA: {self.current_word} ({self.current_word_confidence:.1f}%)", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        else:
+                            cv2.putText(frame, "ESPERANDO MANO...", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                     else:
-                        cv2.putText(frame, "ESPERANDO MANO...", (15, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        if not model:
+                            cv2.putText(frame, "MODO DEMO - SIN MODELO ENTRENADO", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                        elif detected and letter_pred:
+                            cv2.putText(frame, f"LSM: {letter_pred} ({conf_pred:.1f}%)", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        else:
+                            cv2.putText(frame, "ESPERANDO MANO...", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
                 # Encode and store latest frame (ALWAYS, regardless of recording state)
                 ret_enc, jpeg = cv2.imencode('.jpg', frame)
@@ -410,11 +423,12 @@ def get_prediction():
         "is_recording": camera_manager.is_recording,
         "recording_letter": camera_manager.recording_letter,
         "recorded_samples_count": len(camera_manager.recorded_samples),
+        "prediction_mode": camera_manager.prediction_mode,
         "word": camera_manager.current_word,
         "word_confidence": camera_manager.current_word_confidence,
         "is_recording_word": camera_manager.is_recording_word,
         "recording_word_name": camera_manager.recording_word_name,
-        "word_recorded_sequences_count": len(camera_manager.word_recorded_sequences),
+        "word_recorded_samples_count": len(camera_manager.word_recorded_samples),
         "word_model_loaded": word_model is not None,
     }
 
@@ -426,7 +440,7 @@ def stop_camera():
 
 @app.post("/start_capture/{letter}")
 async def start_capture(letter: str):
-    """Starts capturing 100 samples of the specified letter on the backend"""
+    """Starts capturing 50 samples of the specified letter on the backend"""
     if not letter.isalpha() or len(letter) != 1:
         raise HTTPException(status_code=400, detail="La letra debe ser un solo caracter alfabetico.")
     
@@ -434,8 +448,8 @@ async def start_capture(letter: str):
     camera_manager.recorded_samples = []
     camera_manager.recording_letter = letter.upper()
     camera_manager.is_recording = True
-    print(f"Backend: Iniciando captura de 100 muestras para la letra '{letter.upper()}'")
-    return {"msg": f"Captura iniciada para la letra '{letter.upper()}'"}
+    print(f"Backend: Iniciando captura estatica para la letra '{letter.upper()}'")
+    return {"msg": f"Captura iniciada para la letra '{letter.upper()}'", "samples_needed": LETTER_SAMPLES_PER_RECORDING}
 
 
 @app.post("/train")
@@ -508,7 +522,7 @@ def get_registered_letters():
 
 @app.post("/start_capture_word/{word_name}")
 async def start_capture_word(word_name: str):
-    """Starts capturing sequences for a dynamic word/gesture"""
+    """Starts capturing 50 static samples for a word"""
     word_name = word_name.strip()
     if not word_name or len(word_name) > WORD_MAX_NAME_LEN:
         raise HTTPException(status_code=400, detail="El nombre de la palabra debe tener entre 1 y 30 caracteres.")
@@ -519,13 +533,11 @@ async def start_capture_word(word_name: str):
         raise HTTPException(status_code=400, detail="Ya hay una grabación de palabra en curso.")
 
     camera_manager.is_recording = False
-    camera_manager.word_sequence_buffer = []
-    camera_manager.word_recorded_sequences = []
-    camera_manager.word_frame_counter = 0
+    camera_manager.word_recorded_samples = []
     camera_manager.recording_word_name = word_name
     camera_manager.is_recording_word = True
-    print(f"Backend: Iniciando captura de {WORD_SAMPLES_PER_RECORDING} secuencias para la palabra '{word_name}'")
-    return {"msg": f"Captura iniciada para la palabra '{word_name}'", "sequences_needed": WORD_SAMPLES_PER_RECORDING, "seq_length": WORD_SEQ_LENGTH}
+    print(f"Backend: Iniciando captura de {WORD_SAMPLES_PER_RECORDING} muestras para la palabra '{word_name}'")
+    return {"msg": f"Captura iniciada para la palabra '{word_name}'", "samples_needed": WORD_SAMPLES_PER_RECORDING}
 
 
 @app.post("/stop_capture_word")
@@ -535,20 +547,20 @@ async def stop_capture_word():
         return {"msg": "No hay grabación de palabra en curso."}
 
     word_name = camera_manager.recording_word_name
-    seqs = camera_manager.word_recorded_sequences
+    samples = camera_manager.word_recorded_samples
     camera_manager.is_recording_word = False
 
-    if len(seqs) > 0:
+    if len(samples) > 0:
         out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_palabras"))
         os.makedirs(out_dir, exist_ok=True)
         safe_name = "".join(c for c in word_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
-        all_seqs = np.array(seqs)
+        datos_np = np.array(samples)
         out_path = os.path.join(out_dir, f"palabra_{safe_name}.npy")
-        np.save(out_path, all_seqs)
-        print(f"Backend: Guardadas {len(seqs)} secuencias de '{word_name}' en {out_path}")
-        return {"msg": f"Grabación detenida. Se guardaron {len(seqs)} secuencias de '{word_name}'.", "sequences_saved": len(seqs)}
+        np.save(out_path, datos_np)
+        print(f"Backend: Guardadas {len(samples)} muestras de '{word_name}' en {out_path}")
+        return {"msg": f"Grabación detenida. Se guardaron {len(samples)} muestras de '{word_name}'.", "samples_saved": len(samples)}
     else:
-        return {"msg": f"Grabación detenida. No se capturaron suficientes secuencias para '{word_name}'.", "sequences_saved": 0}
+        return {"msg": f"Grabación detenida. No se capturaron muestras para '{word_name}'.", "samples_saved": 0}
 
 
 @app.get("/registered_words")
@@ -566,16 +578,27 @@ def get_registered_words():
         print(f"Error checking registered words: {e}")
         return {"registered": []}
 
+# Debug endpoint to list raw word files
+@app.get("/debug/words_files")
+def debug_word_files():
+    try:
+        ruta_datos = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_palabras"))
+        if not os.path.isdir(ruta_datos):
+            return {"files": [], "msg": "Folder does not exist"}
+        files = [f for f in os.listdir(ruta_datos) if f.endswith('.npy')]
+        return {"files": files, "path": ruta_datos}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @app.post("/train_words")
 async def train_word_model():
-    """Trains an LSTM model on all palabra_*.npy files in datos_palabras"""
+    """Trains a RandomForest model on all palabra_*.npy files in datos_palabras (static samples)"""
     global word_model, word_label_encoder
     try:
+        from sklearn.model_selection import train_test_split
+        from sklearn.ensemble import RandomForestClassifier
         from sklearn.preprocessing import LabelEncoder
-        import tensorflow as tf
-        from tensorflow import keras
-        from tensorflow.keras import layers
 
         ruta_datos = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_palabras"))
         if not os.path.exists(ruta_datos) or len(os.listdir(ruta_datos)) == 0:
@@ -591,54 +614,34 @@ async def train_word_model():
         for archivo in archivos:
             clase = archivo.replace("palabra_", "").replace(".npy", "").replace("_", " ")
             ruta_archivo = os.path.join(ruta_datos, archivo)
-            datos = np.load(ruta_archivo)
-            for seq in datos:
-                if seq.shape == (WORD_SEQ_LENGTH, WORD_FEATURES):
-                    X.append(seq)
-                    y.append(clase)
+            datos_clase = np.load(ruta_archivo)
+            X.append(datos_clase)
+            y.extend([clase] * len(datos_clase))
 
-        if len(X) < 4:
-            raise HTTPException(status_code=400, detail=f"Muy pocas secuencias válidas ({len(X)}). Necesitas al menos 4.")
+        X = np.vstack(X)
+        y = np.array(y)
 
-        X = np.array(X)
-        le = LabelEncoder()
-        y_encoded = le.fit_transform(y)
-        y_cat = keras.utils.to_categorical(y_encoded)
-
-        num_classes = len(le.classes_)
-
-        model_lstm = keras.Sequential([
-            layers.Masking(mask_value=0.0, input_shape=(WORD_SEQ_LENGTH, WORD_FEATURES)),
-            layers.LSTM(128, return_sequences=True),
-            layers.Dropout(0.3),
-            layers.LSTM(64),
-            layers.Dropout(0.3),
-            layers.Dense(64, activation='relu'),
-            layers.Dropout(0.3),
-            layers.Dense(num_classes, activation='softmax')
-        ])
-
-        model_lstm.compile(
-            optimizer='adam',
-            loss='categorical_crossentropy',
-            metrics=['accuracy']
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
         )
 
-        model_lstm.fit(X, y_cat, epochs=50, batch_size=min(16, len(X)), verbose=0, validation_split=0.2 if len(X) >= 8 else 0.0)
+        le = LabelEncoder()
+        y_train_enc = le.fit_transform(y_train)
+
+        clf = RandomForestClassifier(n_estimators=100, random_state=42)
+        clf.fit(X_train, y_train_enc)
 
         model_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "modelo_palabras.pkl"))
         encoder_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "label_encoder_palabras.pkl"))
         with open(model_path, "wb") as f:
-            pickle.dump(model_lstm, f)
+            pickle.dump(clf, f)
         with open(encoder_path, "wb") as f:
             pickle.dump(le, f)
 
-        word_model = model_lstm
+        word_model = clf
         word_label_encoder = le
 
-        return {"msg": "Modelo de palabras entrenado con éxito!", "classes": list(le.classes_), "total_sequences": len(X)}
-    except ImportError as e:
-        raise HTTPException(status_code=500, detail=f"TensorFlow/Keras no está instalado. Instala con: pip install tensorflow. Error: {str(e)}")
+        return {"msg": "Modelo de palabras entrenado con éxito!", "classes": list(le.classes_), "total_samples": len(X)}
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -753,6 +756,31 @@ def tts_get(text: str):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+# ---------- Prediction Mode Endpoints ----------
+
+@app.post("/prediction_mode")
+async def set_prediction_mode(mode: str):
+    """Set the prediction mode to 'letters' or 'words'"""
+    if mode not in ("letters", "words"):
+        raise HTTPException(status_code=400, detail="Mode must be 'letters' or 'words'")
+    camera_manager.prediction_mode = mode
+    camera_manager.current_letter = ""
+    camera_manager.current_confidence = 0.0
+    camera_manager.current_word = ""
+    camera_manager.current_word_confidence = 0.0
+    if camera_manager.is_recording:
+        camera_manager.is_recording = False
+        camera_manager.recorded_samples = []
+    if camera_manager.is_recording_word:
+        camera_manager.is_recording_word = False
+        camera_manager.word_recorded_samples = []
+    print(f"Backend: Modo de prediccion cambiado a '{mode}'")
+    return {"msg": f"Prediction mode set to '{mode}'", "mode": mode}
+
+@app.get("/prediction_mode")
+def get_prediction_mode():
+    return {"mode": camera_manager.prediction_mode}
+
 # ---------- Compatibility Endpoints to Support Frontend/Backend Route Differences ----------
 
 class RecordingStartRequest(BaseModel):
@@ -783,8 +811,7 @@ def stop_recording():
     camera_manager.is_recording = False
     camera_manager.is_recording_word = False
     camera_manager.recorded_samples = []
-    camera_manager.word_sequence_buffer = []
-    camera_manager.word_recorded_sequences = []
+    camera_manager.word_recorded_samples = []
     return {"msg": "Grabación detenida correctamente"}
 
 

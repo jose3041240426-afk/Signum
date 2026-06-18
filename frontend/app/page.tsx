@@ -22,7 +22,7 @@ export default function Home() {
   // Word recording states
   const [isRecordingWord, setIsRecordingWord] = useState(false);
   const [recordingWordName, setRecordingWordName] = useState("");
-  const [wordRecordedSeqCount, setWordRecordedSeqCount] = useState(0);
+  const [wordRecordedSamplesCount, setWordRecordedSamplesCount] = useState(0);
   const [wordToCapture, setWordToCapture] = useState("");
   const [wordPrediction, setWordPrediction] = useState("");
   const [wordConfidence, setWordConfidence] = useState(0);
@@ -30,6 +30,9 @@ export default function Home() {
   const [isTrainingWords, setIsTrainingWords] = useState(false);
   const [trainingWordsMessage, setTrainingWordsMessage] = useState("");
   const [registeredWords, setRegisteredWords] = useState<string[]>([]);
+  
+  // Prediction mode — controls which model runs (letters only or words only)
+  const [predictionMode, setPredictionMode] = useState("letters"); // "letters" | "words"
   
   // Training states
   const [isTraining, setIsTraining] = useState(false);
@@ -74,9 +77,12 @@ export default function Home() {
   const lastAddedLetterRef = useRef("");
   const stableCountRef = useRef(0);
 const lastSpokenLetterRef = useRef("");
+  const lastSpokenWordRef = useRef("");
   const speakingRef = useRef(false);
   const audioCacheRef = useRef<Map<string, string>>(new Map());
   const prefetchingRef = useRef<Set<string>>(new Set());
+  const prevIsRecordingWordRef = useRef(false);
+  const prevIsRecordingRef = useRef(false);
 
   const prefetchAudio = async (text: string) => {
     const key = text.trim().toLowerCase();
@@ -165,50 +171,84 @@ const lastSpokenLetterRef = useRef("");
                   setIsRecording(data.is_recording);
                   setRecordingLetter(data.recording_letter);
                   setRecordedSamplesCount(data.recorded_samples_count);
+                  // Detect word recording completion (transition true→false with samples captured)
+                  if (prevIsRecordingWordRef.current && !data.is_recording_word && data.word_recorded_samples_count > 0) {
+                    setStatusMessage(`✅ Palabra '${data.recording_word_name}' grabada correctamente (${data.word_recorded_samples_count} muestras).`);
+                    fetchRegisteredWords();
+                  }
+                  // Detect letter recording completion
+                  if (prevIsRecordingRef.current && !data.is_recording && data.recorded_samples_count >= 50) {
+                    setStatusMessage(`✅ Letra '${data.recording_letter}' grabada correctamente (${data.recorded_samples_count} muestras).`);
+                    fetchRegisteredLetters();
+                  }
+                  prevIsRecordingWordRef.current = data.is_recording_word;
+                  prevIsRecordingRef.current = data.is_recording;
+
                   setIsRecordingWord(data.is_recording_word);
                   setRecordingWordName(data.recording_word_name);
-                  setWordRecordedSeqCount(data.word_recorded_sequences_count);
+                  setWordRecordedSamplesCount(data.word_recorded_samples_count);
                   setWordModelLoaded(data.word_model_loaded);
                   setWordPrediction(data.word || "");
                   setWordConfidence(Math.round(data.word_confidence || 0));
+                  if (data.prediction_mode) setPredictionMode(data.prediction_mode);
 
                   if (data.is_recording_word) {
-                    setStatusMessage(`Grabando palabra '${data.recording_word_name}': ${data.word_recorded_sequences_count}/30 secuencias`);
+                    setStatusMessage(`Grabando palabra '${data.recording_word_name}': ${data.word_recorded_samples_count}/50 muestras`);
                   } else if (data.is_recording) {
                 // Currently recording samples
                 setLetter("");
                 setConfidence(0);
-                setStatusMessage(`Grabando muestras para la letra '${data.recording_letter}': ${data.recorded_samples_count}/100`);
+                setStatusMessage(`Grabando muestras para la letra '${data.recording_letter}': ${data.recorded_samples_count}/50`);
         } else if (data.hand_detected && (data.letter || data.word)) {
           setLetter(data.letter);
           setConfidence(Math.round(data.confidence));
 
           // Pre-fetch audio as soon as we detect, before threshold
           prefetchAudio(data.letter);
+          prefetchAudio(data.word);
 
           if (data.letter !== lastSpokenLetterRef.current && data.confidence > 55 && !data.is_recording) {
             lastSpokenLetterRef.current = data.letter;
             speakLetter(data.letter);
           }
 
-          // Auto-add feature: if a letter is held stable for 6 frames (approx 0.6s)
+          if (data.word && data.word !== lastSpokenWordRef.current && data.word_confidence > 30 && !data.is_recording_word) {
+            lastSpokenWordRef.current = data.word;
+            speakLetter(data.word);
+          }
+
+          // Auto-add feature: if a sign is held stable for 6 frames (approx 0.6s)
           if (autoAddActive) {
-                  if (data.letter === lastAddedLetterRef.current) {
-                    stableCountRef.current = 0;
-                  } else {
-                    stableCountRef.current += 1;
-                    if (stableCountRef.current > 6 && data.confidence > 55) {
-                      setPhrase((prev) => prev + data.letter);
-                      lastAddedLetterRef.current = data.letter;
-                      stableCountRef.current = 0;
-                    }
-                  }
+            if (predictionMode === "words" && data.word) {
+              if (data.word === lastAddedLetterRef.current) {
+                stableCountRef.current = 0;
+              } else {
+                stableCountRef.current += 1;
+                if (stableCountRef.current > 6 && data.word_confidence > 30) {
+                  setPhrase((prev) => prev + data.word + " ");
+                  lastAddedLetterRef.current = data.word;
+                  stableCountRef.current = 0;
                 }
+              }
+            } else if (predictionMode === "letters" && data.letter) {
+              if (data.letter === lastAddedLetterRef.current) {
+                stableCountRef.current = 0;
+              } else {
+                stableCountRef.current += 1;
+                if (stableCountRef.current > 6 && data.confidence > 55) {
+                  setPhrase((prev) => prev + data.letter);
+                  lastAddedLetterRef.current = data.letter;
+                  stableCountRef.current = 0;
+                }
+              }
+            }
+          }
         } else {
           setLetter("");
           setConfidence(0);
           stableCountRef.current = 0;
           lastSpokenLetterRef.current = "";
+          lastSpokenWordRef.current = "";
         }
             }
           } catch (e) {
@@ -231,32 +271,53 @@ const lastSpokenLetterRef = useRef("");
   const startRecording = async () => {
     if (!letterToCapture) return;
     try {
-      await fetch(`${BACKEND}/recording/start`, {
+      const res = await fetch(`${BACKEND}/recording/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ letter: letterToCapture }),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Error desconocido" }));
+        setStatusMessage(`Error: ${err.detail || "No se pudo iniciar la grabación"}`);
+        return;
+      }
       setIsRecording(true);
-    } catch { /* silent */ }
+    } catch {
+      setStatusMessage("Error de conexión al iniciar grabación.");
+    }
   };
 
   const startRecordingWord = async () => {
     if (!wordToCapture) return;
     try {
-      await fetch(`${BACKEND}/recording_word/start`, {
+      const res = await fetch(`${BACKEND}/recording_word/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ word_name: wordToCapture }),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Error desconocido" }));
+        setStatusMessage(`Error: ${err.detail || "No se pudo iniciar la grabación de palabra"}`);
+        return;
+      }
       setIsRecordingWord(true);
-    } catch { /* silent */ }
+      setStatusMessage(`Grabando palabra '${wordToCapture}': acerca la mano a la cámara...`);
+    } catch {
+      setStatusMessage("Error de conexión al iniciar grabación de palabra.");
+    }
   };
 
   const stopRecording = async () => {
     try {
-      await fetch(`${BACKEND}/recording/stop`, { method: "POST" });
-      setIsRecording(false);
-      setIsRecordingWord(false);
+      if (isRecordingWord) {
+        await fetch(`${BACKEND}/stop_capture_word`, { method: "POST" });
+        setIsRecordingWord(false);
+        fetchRegisteredWords();
+      } else {
+        await fetch(`${BACKEND}/recording/stop`, { method: "POST" });
+        setIsRecording(false);
+        fetchRegisteredLetters();
+      }
     } catch { /* silent */ }
   };
 
@@ -477,6 +538,38 @@ const lastSpokenLetterRef = useRef("");
           position: "relative"
         }}>
           
+          {/* Prediction Mode Toggle — choose what to detect */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0", background: "rgba(15, 23, 42, 0.15)", borderRadius: "14px", padding: "4px", marginBottom: "0" }}>
+            <button
+              onClick={() => {
+                setPredictionMode("letters");
+                fetch(`${BACKEND}/prediction_mode?mode=letters`, { method: "POST" }).catch(() => {});
+              }}
+              style={{
+                flex: 1, padding: "10px 16px", border: "none", borderRadius: "10px",
+                background: predictionMode === "letters" ? "#065f46" : "transparent",
+                color: predictionMode === "letters" ? "#fff" : "#475569",
+                cursor: "pointer", fontSize: "0.95rem", fontWeight: 700,
+                transition: "all 0.2s"
+              }}>
+              🔤 Deletrear
+            </button>
+            <button
+              onClick={() => {
+                setPredictionMode("words");
+                fetch(`${BACKEND}/prediction_mode?mode=words`, { method: "POST" }).catch(() => {});
+              }}
+              style={{
+                flex: 1, padding: "10px 16px", border: "none", borderRadius: "10px",
+                background: predictionMode === "words" ? "#065f46" : "transparent",
+                color: predictionMode === "words" ? "#fff" : "#475569",
+                cursor: "pointer", fontSize: "0.95rem", fontWeight: 700,
+                transition: "all 0.2s"
+              }}>
+              📖 Palabras
+            </button>
+          </div>
+
           {/* Letter Input Row */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <label style={{ fontWeight: 700, fontSize: "1.05rem" }}>Letra a registrar:</label>
@@ -530,8 +623,11 @@ const lastSpokenLetterRef = useRef("");
               {/* Live predictions overlay/footer in the transcription box */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #f1f5f9" }}>
                 <div style={{ fontSize: "0.9rem", color: "#64748b", fontWeight: 600 }}>
-                  Detectando: <span style={{ color: "#3b82f6", fontWeight: 800 }}>{wordPrediction || letter || "—"}</span>
-                  {letter && <span style={{ marginLeft: "8px", color: confidence > 55 ? "#4ade80" : "#ef4444" }}>({confidence}%)</span>}
+                  Detectando: <span style={{ color: predictionMode === "words" ? "#f97316" : "#3b82f6", fontWeight: 800 }}>
+                    {predictionMode === "words" ? (wordPrediction || "—") : (letter || "—")}
+                  </span>
+                  {predictionMode === "letters" && letter && <span style={{ marginLeft: "8px", color: confidence > 55 ? "#4ade80" : "#ef4444" }}>({confidence}%)</span>}
+                  {predictionMode === "words" && wordPrediction && <span style={{ marginLeft: "8px", color: wordConfidence > 30 ? "#4ade80" : "#ef4444" }}>({wordConfidence}%)</span>}
                 </div>
                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                   <label style={{ fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "4px", marginRight: "10px", cursor: "pointer" }}>
@@ -568,8 +664,8 @@ const lastSpokenLetterRef = useRef("");
               boxShadow: "0 10px 25px rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)"
             }}>
               <div>
-                {isRecording && `Grabando letra: ${recordedSamplesCount}/100`}
-                {isRecordingWord && `Grabando palabra: ${wordRecordedSeqCount}/30`}
+                 {isRecording && `Grabando letra: ${recordedSamplesCount}/50`}
+                {isRecordingWord && `Grabando palabra: ${wordRecordedSamplesCount}/50 muestras`}
                 {isTraining && `Entrenando modelo de letras...`}
                 {isTrainingWords && `Entrenando modelo de palabras...`}
               </div>
@@ -621,6 +717,13 @@ const lastSpokenLetterRef = useRef("");
               ))}
               {registeredWords.length === 0 && <span style={{ color: "#94a3b8" }}>Ninguna palabra entrenada.</span>}
             </div>
+
+            <button onClick={async () => {
+              const res = await fetch(`${BACKEND}/debug/words_files`);
+              const data = await res.json();
+              console.log('Debug word files:', data);
+              alert('Word files:\n' + (data.files || []).join('\n'));
+            }} style={{ marginTop: '12px', padding: '8px 16px', background: '#0f3a73', color: '#fff', border: 'none', borderRadius: '6px' }}>Mostrar archivos .npy de palabras</button>
           </div>
         </div>
       )}

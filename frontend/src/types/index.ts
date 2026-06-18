@@ -12,11 +12,12 @@ export interface PredictionData {
   isRecording: boolean;
   recordingLetter: string;
   recordedSamplesCount: number;
+  predictionMode: string;
   word: string;
   wordConfidence: number;
   isRecordingWord: boolean;
   recordingWordName: string;
-  wordRecordedSeqCount: number;
+  wordRecordedSamplesCount: number;
   wordModelLoaded: boolean;
 }
 
