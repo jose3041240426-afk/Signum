@@ -17,6 +17,14 @@ const DEFAULT_PREDICTION: PredictionData = {
   recordingWordName: "",
   wordRecordedSamplesCount: 0,
   wordModelLoaded: false,
+  dynamicSign: "",
+  dynamicConfidence: 0,
+  isRecordingDynamic: false,
+  recordingDynamicName: "",
+  dynamicRecordedFrames: 0,
+  dynamicSequencesSaved: 0,
+  dynamicBufferLen: 0,
+  dynamicModelLoaded: false,
 };
 
 export function usePrediction(backendStatus: "checking" | "online" | "offline") {

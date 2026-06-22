@@ -5,6 +5,8 @@ import type { BackendStatus } from "@/types";
 export function useBackend() {
   const [status, setStatus] = useState<BackendStatus>("checking");
   const [modelLoaded, setModelLoaded] = useState(false);
+  const [wordModelLoaded, setWordModelLoaded] = useState(false);
+  const [dynamicModelLoaded, setDynamicModelLoaded] = useState(false);
   const [message, setMessage] = useState("Conectando con el servidor de Python...");
 
   useEffect(() => {
@@ -16,10 +18,12 @@ export function useBackend() {
         if (data.ok) {
           setStatus("online");
           setModelLoaded(data.modelLoaded);
-          if (data.modelLoaded) {
+          setWordModelLoaded(data.wordModelLoaded);
+          setDynamicModelLoaded(data.dynamicModelLoaded);
+          if (data.modelLoaded || data.wordModelLoaded || data.dynamicModelLoaded) {
             setMessage("Servidor en linea - Haz senas LSM");
           } else {
-            setMessage("Servidor en linea pero modelo_lsm.pkl no encontrado. Por favor, entrena tu modelo.");
+            setMessage("Servidor en linea pero no hay modelos entrenados. Entrena tu modelo.");
           }
         } else {
           setStatus("offline");
@@ -36,5 +40,5 @@ export function useBackend() {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  return { status, modelLoaded, message, setMessage };
+  return { status, modelLoaded, wordModelLoaded, dynamicModelLoaded, message, setMessage };
 }

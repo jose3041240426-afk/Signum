@@ -40,16 +40,20 @@ except ImportError:
 # Paths
 DATA_DIR = os.path.join(BASE_DIR, "..", "..", "datos_lsm")
 WORDS_DATA_DIR = os.path.join(BASE_DIR, "..", "..", "datos_palabras")
+DYNAMIC_DATA_DIR = os.path.join(BASE_DIR, "..", "..", "datos_dinamicos")
 LETTERS_MOTION_DIR = os.path.join(BASE_DIR, "..", "..", "datos_letras_movimiento")
 MODEL_DIR = os.path.join(BASE_DIR, "ml")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(WORDS_DATA_DIR, exist_ok=True)
+os.makedirs(DYNAMIC_DATA_DIR, exist_ok=True)
 os.makedirs(LETTERS_MOTION_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# Word recording constants
+# Recording constants
 LETTER_SAMPLES_PER_RECORDING = 50
 WORD_SAMPLES_PER_RECORDING = 50
+DYNAMIC_FRAMES_PER_SEQUENCE = 50
+DYNAMICS_PER_SIGN = 3
 WORD_MAX_NAME_LEN = 30
 
 app = FastAPI(title="LSM Unified Capture, Training & Inference API")
@@ -67,6 +71,8 @@ app.add_middleware(
 model = None
 word_model = None
 word_label_encoder = None
+dynamic_model = None
+dynamic_label_encoder = None
 
 def load_lsm_model():
     global model
@@ -106,9 +112,32 @@ def load_word_model():
         word_label_encoder = None
         return False
 
+def load_dynamic_model():
+    global dynamic_model, dynamic_label_encoder
+    model_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "modelo_dinamico.pkl"))
+    encoder_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "label_encoder_dinamico.pkl"))
+    if os.path.exists(model_path) and os.path.exists(encoder_path):
+        try:
+            with open(model_path, "rb") as f:
+                dynamic_model = pickle.load(f)
+            with open(encoder_path, "rb") as f:
+                dynamic_label_encoder = pickle.load(f)
+            print(f"Backend: modelo_dinamico.pkl cargado exitosamente.")
+            return True
+        except Exception as e:
+            print(f"Error al cargar modelo_dinamico.pkl: {e}")
+            dynamic_model = None
+            dynamic_label_encoder = None
+    else:
+        print("Backend: modelo_dinamico.pkl no encontrado.")
+        dynamic_model = None
+        dynamic_label_encoder = None
+        return False
+
 # Initial attempt to load the models
 load_lsm_model()
 load_word_model()
+load_dynamic_model()
 
 class CameraManager:
     def __init__(self):
@@ -127,7 +156,7 @@ class CameraManager:
         self.current_word_confidence = 0.0
 
         # Prediction Mode — only one model runs at a time
-        self.prediction_mode = "letters"  # "letters" or "words"
+        self.prediction_mode = "letters"  # "letters" | "words" | "dynamic"
 
         # Recording State (always static, 50 samples)
         self.is_recording = False
@@ -138,6 +167,17 @@ class CameraManager:
         self.is_recording_word = False
         self.recording_word_name = ""
         self.word_recorded_samples = []
+
+        # Dynamic Recording State (sequence of frames)
+        self.is_recording_dynamic = False
+        self.recording_dynamic_name = ""
+        self.dynamic_recorded_frames = []
+        self.dynamic_sequences_saved = 0
+
+        # Dynamic prediction buffer
+        self.dynamic_buffer = []
+        self.current_dynamic = ""
+        self.current_dynamic_confidence = 0.0
 
         # MediaPipe Hands
         self.mp_hands = mp.solutions.hands
@@ -280,9 +320,42 @@ class CameraManager:
                     except Exception as e:
                         print(f"Error en grabación de palabra: {e}")
 
+                # Dynamic capture (sequence of frames for movement-based signs)
+                if self.is_recording_dynamic and self.recording_dynamic_name and hand_idx >= 0:
+                    try:
+                        datos_normalizados = normalize_landmarks(hand_landmarks)
+                        self.dynamic_recorded_frames.append(datos_normalizados)
+
+                        if len(self.dynamic_recorded_frames) >= DYNAMIC_FRAMES_PER_SEQUENCE:
+                            out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_dinamicos"))
+                            os.makedirs(out_dir, exist_ok=True)
+                            safe_name = "".join(c for c in self.recording_dynamic_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
+                            seq_np = np.array(self.dynamic_recorded_frames)
+                            timestamp = int(time.time() * 1000)
+                            out_path = os.path.join(out_dir, f"din_{safe_name}_{timestamp}.npy")
+                            np.save(out_path, seq_np)
+                            self.dynamic_sequences_saved += 1
+                            print(f"CameraManager: Secuencia {self.dynamic_sequences_saved}/{DYNAMICS_PER_SIGN} de '{self.recording_dynamic_name}' guardada ({DYNAMIC_FRAMES_PER_SEQUENCE} frames)")
+                            self.dynamic_recorded_frames = []
+                            if self.dynamic_sequences_saved >= DYNAMICS_PER_SIGN:
+                                print(f"CameraManager: {DYNAMICS_PER_SIGN} secuencias de '{self.recording_dynamic_name}' completadas.")
+                                self.is_recording_dynamic = False
+                    except Exception as e:
+                        print(f"Error en grabación dinámica: {e}")
+
+                # Dynamic prediction buffer (always accumulate when in dynamic mode)
+                if self.prediction_mode == "dynamic" and detected and hand_idx >= 0:
+                    try:
+                        datos_normalizados = normalize_landmarks(hand_landmarks)
+                        self.dynamic_buffer.append(datos_normalizados)
+                        if len(self.dynamic_buffer) > DYNAMIC_FRAMES_PER_SEQUENCE:
+                            self.dynamic_buffer = self.dynamic_buffer[-DYNAMIC_FRAMES_PER_SEQUENCE:]
+                    except Exception as e:
+                        pass
+
                 # Prediction — only run the active mode's model
                 if self.prediction_mode == "letters":
-                    if detected and model and not self.is_recording and not self.is_recording_word:
+                    if detected and model and not self.is_recording and not self.is_recording_word and not self.is_recording_dynamic:
                         try:
                             datos_normalizados = normalize_landmarks(hand_landmarks)
                             pred = model.predict([datos_normalizados])[0]
@@ -296,14 +369,18 @@ class CameraManager:
                             print(f"Error en prediccion: {e}")
                     self.current_word = ""
                     self.current_word_confidence = 0.0
+                    self.current_dynamic = ""
+                    self.current_dynamic_confidence = 0.0
 
                 elif self.prediction_mode == "words":
                     self.current_letter = ""
                     self.current_confidence = 0.0
                     letter_pred = ""
                     conf_pred = 0.0
+                    self.current_dynamic = ""
+                    self.current_dynamic_confidence = 0.0
 
-                    if detected and word_model and not self.is_recording and not self.is_recording_word:
+                    if detected and word_model and not self.is_recording and not self.is_recording_word and not self.is_recording_dynamic:
                         try:
                             datos_normalizados = normalize_landmarks(hand_landmarks)
                             pred_word = word_model.predict([datos_normalizados])[0]
@@ -323,6 +400,36 @@ class CameraManager:
                         self.current_word = ""
                         self.current_word_confidence = 0.0
 
+                elif self.prediction_mode == "dynamic":
+                    self.current_letter = ""
+                    self.current_confidence = 0.0
+                    letter_pred = ""
+                    conf_pred = 0.0
+                    self.current_word = ""
+                    self.current_word_confidence = 0.0
+
+                    if len(self.dynamic_buffer) == DYNAMIC_FRAMES_PER_SEQUENCE and dynamic_model and not self.is_recording_dynamic:
+                        try:
+                            seq_flattened = np.array(self.dynamic_buffer).flatten().reshape(1, -1)
+                            pred_idx = dynamic_model.predict(seq_flattened)[0]
+                            probs = dynamic_model.predict_proba(seq_flattened)[0]
+                            idx_max = np.argmax(probs)
+                            dyn_conf = float(probs[idx_max] * 100)
+                            if dyn_conf > 30:
+                                sign_name = dynamic_label_encoder.inverse_transform([pred_idx])[0]
+                                self.current_dynamic = str(sign_name)
+                                self.current_dynamic_confidence = dyn_conf
+                            else:
+                                self.current_dynamic = ""
+                                self.current_dynamic_confidence = 0.0
+                        except Exception as e:
+                            print(f"Error en prediccion dinamica: {e}")
+                            self.current_dynamic = ""
+                            self.current_dynamic_confidence = 0.0
+                    else:
+                        self.current_dynamic = ""
+                        self.current_dynamic_confidence = 0.0
+
                 self.hand_detected = detected
                 self.current_letter = letter_pred
                 self.current_confidence = conf_pred
@@ -341,8 +448,28 @@ class CameraManager:
                         (48, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
                     bar_w = int(w * (sample_count / WORD_SAMPLES_PER_RECORDING))
                     cv2.rectangle(frame, (0, h - 8), (bar_w, h), (0, 165, 255), -1)
+                elif self.is_recording_dynamic:
+                    cv2.circle(frame, (30, 30), 8, (255, 0, 255), -1)
+                    frame_count = len(self.dynamic_recorded_frames)
+                    progress = self.dynamic_sequences_saved + (frame_count / DYNAMIC_FRAMES_PER_SEQUENCE)
+                    total = DYNAMICS_PER_SIGN
+                    cv2.putText(frame, f"DINAMICO '{self.recording_dynamic_name}': seq {self.dynamic_sequences_saved+1}/{total} ({frame_count}/{DYNAMIC_FRAMES_PER_SEQUENCE})",
+                        (48, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
+                    bar_w = int(w * (progress / total))
+                    cv2.rectangle(frame, (0, h - 8), (bar_w, h), (255, 0, 255), -1)
                 else:
-                    if self.prediction_mode == "words":
+                    if self.prediction_mode == "dynamic":
+                        if not dynamic_model:
+                            cv2.putText(frame, "MODO DEMO - SIN MODELO DINAMICO", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                        elif detected and self.current_dynamic:
+                            cv2.putText(frame, f"DINAMICO: {self.current_dynamic} ({self.current_dynamic_confidence:.1f}%)", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        else:
+                            buf_len = len(self.dynamic_buffer)
+                            cv2.putText(frame, f"DINAMICO - Buffer: {buf_len}/{DYNAMIC_FRAMES_PER_SEQUENCE}", (15, 30),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+                    elif self.prediction_mode == "words":
                         if not word_model:
                             cv2.putText(frame, "MODO DEMO - SIN MODELO DE PALABRAS", (15, 30),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
@@ -401,6 +528,8 @@ def health():
     return {
         "status": "ok",
         "model_loaded": model is not None,
+        "word_model_loaded": word_model is not None,
+        "dynamic_model_loaded": dynamic_model is not None,
         "camera_active": camera_manager.cap is not None
     }
 
@@ -430,6 +559,14 @@ def get_prediction():
         "recording_word_name": camera_manager.recording_word_name,
         "word_recorded_samples_count": len(camera_manager.word_recorded_samples),
         "word_model_loaded": word_model is not None,
+        "dynamic_sign": camera_manager.current_dynamic,
+        "dynamic_confidence": camera_manager.current_dynamic_confidence,
+        "is_recording_dynamic": camera_manager.is_recording_dynamic,
+        "recording_dynamic_name": camera_manager.recording_dynamic_name,
+        "dynamic_recorded_frames": len(camera_manager.dynamic_recorded_frames),
+        "dynamic_sequences_saved": camera_manager.dynamic_sequences_saved,
+        "dynamic_buffer_len": len(camera_manager.dynamic_buffer),
+        "dynamic_model_loaded": dynamic_model is not None,
     }
 
 @app.post("/camera/stop")
@@ -660,6 +797,164 @@ async def delete_word(word_name: str):
     else:
         raise HTTPException(status_code=404, detail=f"No se encontraron datos para '{word_name}'.")
 
+
+# ---------- Dynamic (Movement) Endpoints ----------
+
+@app.post("/start_capture_dynamic/{sign_name}")
+async def start_capture_dynamic(sign_name: str):
+    """Starts capturing sequences of frames for a movement-based sign"""
+    sign_name = sign_name.strip()
+    if not sign_name or len(sign_name) > WORD_MAX_NAME_LEN:
+        raise HTTPException(status_code=400, detail="El nombre debe tener entre 1 y 30 caracteres.")
+    if not all(c.isalnum() or c in "_ " for c in sign_name):
+        raise HTTPException(status_code=400, detail="Solo se permiten letras, numeros, espacios y guion bajo.")
+
+    if camera_manager.is_recording_dynamic:
+        raise HTTPException(status_code=400, detail="Ya hay una grabacion dinamica en curso.")
+
+    camera_manager.is_recording = False
+    camera_manager.is_recording_word = False
+    camera_manager.dynamic_recorded_frames = []
+    camera_manager.recording_dynamic_name = sign_name
+    camera_manager.dynamic_sequences_saved = 0
+    camera_manager.is_recording_dynamic = True
+    print(f"Backend: Iniciando captura dinamica de {DYNAMICS_PER_SIGN} secuencias x {DYNAMIC_FRAMES_PER_SEQUENCE} frames para '{sign_name}'")
+    return {
+        "msg": f"Captura dinamica iniciada para '{sign_name}'",
+        "sequences_needed": DYNAMICS_PER_SIGN,
+        "frames_per_sequence": DYNAMIC_FRAMES_PER_SEQUENCE,
+    }
+
+@app.post("/stop_capture_dynamic")
+async def stop_capture_dynamic():
+    """Stops the current dynamic recording, saving whatever has been captured so far"""
+    if not camera_manager.is_recording_dynamic:
+        return {"msg": "No hay grabacion dinamica en curso."}
+
+    sign_name = camera_manager.recording_dynamic_name
+    saved = camera_manager.dynamic_sequences_saved
+    remaining_frames = len(camera_manager.dynamic_recorded_frames)
+    camera_manager.is_recording_dynamic = False
+    camera_manager.dynamic_recorded_frames = []
+
+    if remaining_frames > 0:
+        out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_dinamicos"))
+        os.makedirs(out_dir, exist_ok=True)
+        safe_name = "".join(c for c in sign_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
+        seq_np = np.array(camera_manager.dynamic_recorded_frames[:DYNAMIC_FRAMES_PER_SEQUENCE])
+        if len(seq_np) > 0:
+            timestamp = int(time.time() * 1000)
+            out_path = os.path.join(out_dir, f"din_{safe_name}_{timestamp}.npy")
+            np.save(out_path, seq_np)
+            saved += 1
+
+    print(f"Backend: Captura dinamica detenida. {saved} secuencias guardadas para '{sign_name}'.")
+    return {"msg": f"Grabacion detenida. Se guardaron {saved} secuencias de '{sign_name}'.", "sequences_saved": saved}
+
+@app.get("/registered_dynamic")
+def get_registered_dynamic():
+    """Returns a list of dynamic signs that have recorded data in datos_dinamicos"""
+    try:
+        ruta_datos = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_dinamicos"))
+        if not os.path.exists(ruta_datos):
+            return {"registered": []}
+
+        archivos = [f for f in os.listdir(ruta_datos) if f.endswith(".npy") and f.startswith("din_")]
+        signs = set()
+        for archivo in archivos:
+            name_part = archivo.replace("din_", "").rsplit("_", 1)[0].replace("_", " ")
+            signs.add(name_part)
+        return {"registered": sorted(list(signs))}
+    except Exception as e:
+        print(f"Error checking registered dynamic signs: {e}")
+        return {"registered": []}
+
+@app.get("/dynamic_sign_details/{sign_name}")
+def get_dynamic_sign_details(sign_name: str):
+    """Returns the number of recorded sequences for a specific dynamic sign"""
+    try:
+        ruta_datos = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_dinamicos"))
+        if not os.path.exists(ruta_datos):
+            return {"sign": sign_name, "sequences": 0}
+
+        safe_name = "".join(c for c in sign_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
+        archivos = [f for f in os.listdir(ruta_datos) if f.endswith(".npy") and f.startswith(f"din_{safe_name}_")]
+        return {"sign": sign_name, "sequences": len(archivos)}
+    except Exception as e:
+        return {"sign": sign_name, "sequences": 0, "error": str(e)}
+
+@app.post("/train_dynamic")
+async def train_dynamic_model():
+    """Trains a RandomForest model on all din_*.npy files in datos_dinamicos (flattened sequences)"""
+    global dynamic_model, dynamic_label_encoder
+    try:
+        from sklearn.model_selection import train_test_split
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.preprocessing import LabelEncoder
+
+        ruta_datos = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_dinamicos"))
+        if not os.path.exists(ruta_datos) or len(os.listdir(ruta_datos)) == 0:
+            raise HTTPException(status_code=400, detail="No hay datos dinamicos en la carpeta 'datos_dinamicos'.")
+
+        archivos = [f for f in os.listdir(ruta_datos) if f.endswith(".npy") and f.startswith("din_")]
+        if len(archivos) < 2:
+            raise HTTPException(status_code=400, detail="Necesitas registrar al menos 2 senas dinamicas diferentes para entrenar.")
+
+        X = []
+        y = []
+
+        for archivo in archivos:
+            name_part = archivo.replace("din_", "").rsplit("_", 1)[0].replace("_", " ")
+            ruta_archivo = os.path.join(ruta_datos, archivo)
+            datos_clase = np.load(ruta_archivo)
+            seq_flattened = datos_clase.flatten().reshape(1, -1)
+            X.append(seq_flattened[0])
+            y.append(name_part)
+
+        X = np.array(X)
+        y = np.array(y)
+
+        le = LabelEncoder()
+        y_enc = le.fit_transform(y)
+
+        clf = RandomForestClassifier(n_estimators=100, random_state=42)
+        clf.fit(X, y_enc)
+
+        model_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "modelo_dinamico.pkl"))
+        encoder_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "label_encoder_dinamico.pkl"))
+        with open(model_path, "wb") as f:
+            pickle.dump(clf, f)
+        with open(encoder_path, "wb") as f:
+            pickle.dump(le, f)
+
+        dynamic_model = clf
+        dynamic_label_encoder = le
+
+        load_dynamic_model()
+
+        return {"msg": "Modelo dinamico entrenado con exito!", "classes": list(le.classes_), "total_sequences": len(X)}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/delete_dynamic/{sign_name}")
+async def delete_dynamic(sign_name: str):
+    """Deletes all recorded dynamic sequences for a specific sign"""
+    safe_name = "".join(c for c in sign_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
+    ruta_datos = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_dinamicos"))
+    if not os.path.exists(ruta_datos):
+        raise HTTPException(status_code=404, detail=f"No se encontraron datos para '{sign_name}'.")
+
+    archivos = [f for f in os.listdir(ruta_datos) if f.startswith(f"din_{safe_name}_") and f.endswith(".npy")]
+    if not archivos:
+        raise HTTPException(status_code=404, detail=f"No se encontraron datos para '{sign_name}'.")
+
+    for archivo in archivos:
+        os.remove(os.path.join(ruta_datos, archivo))
+
+    return {"msg": f"Datos de '{sign_name}' eliminados ({len(archivos)} secuencias)."}
+
 class Frame(BaseModel):
     landmarks: List[float]
 
@@ -760,20 +1055,26 @@ def tts_get(text: str):
 
 @app.post("/prediction_mode")
 async def set_prediction_mode(mode: str):
-    """Set the prediction mode to 'letters' or 'words'"""
-    if mode not in ("letters", "words"):
-        raise HTTPException(status_code=400, detail="Mode must be 'letters' or 'words'")
+    """Set the prediction mode to 'letters', 'words', or 'dynamic'"""
+    if mode not in ("letters", "words", "dynamic"):
+        raise HTTPException(status_code=400, detail="Mode must be 'letters', 'words', or 'dynamic'")
     camera_manager.prediction_mode = mode
     camera_manager.current_letter = ""
     camera_manager.current_confidence = 0.0
     camera_manager.current_word = ""
     camera_manager.current_word_confidence = 0.0
+    camera_manager.current_dynamic = ""
+    camera_manager.current_dynamic_confidence = 0.0
+    camera_manager.dynamic_buffer = []
     if camera_manager.is_recording:
         camera_manager.is_recording = False
         camera_manager.recorded_samples = []
     if camera_manager.is_recording_word:
         camera_manager.is_recording_word = False
         camera_manager.word_recorded_samples = []
+    if camera_manager.is_recording_dynamic:
+        camera_manager.is_recording_dynamic = False
+        camera_manager.dynamic_recorded_frames = []
     print(f"Backend: Modo de prediccion cambiado a '{mode}'")
     return {"msg": f"Prediction mode set to '{mode}'", "mode": mode}
 
@@ -807,11 +1108,13 @@ async def delete_word_alias(word_name: str):
 
 @app.post("/recording/stop")
 def stop_recording():
-    """Stops both letter and word recording"""
+    """Stops all recording types"""
     camera_manager.is_recording = False
     camera_manager.is_recording_word = False
+    camera_manager.is_recording_dynamic = False
     camera_manager.recorded_samples = []
     camera_manager.word_recorded_samples = []
+    camera_manager.dynamic_recorded_frames = []
     return {"msg": "Grabación detenida correctamente"}
 
 
