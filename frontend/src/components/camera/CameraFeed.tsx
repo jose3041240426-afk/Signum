@@ -1,12 +1,14 @@
 "use client";
-import { ENV } from "@/lib/env";
+import { RefObject } from "react";
 
 interface CameraFeedProps {
   cameraOn: boolean;
   backendStatus: "checking" | "online" | "offline";
+  videoRef: RefObject<HTMLVideoElement | null>;
+  canvasRef: RefObject<HTMLCanvasElement | null>;
 }
 
-export function CameraFeed({ cameraOn, backendStatus }: CameraFeedProps) {
+export function CameraFeed({ cameraOn, backendStatus, videoRef, canvasRef }: CameraFeedProps) {
   if (backendStatus !== "online" || !cameraOn) {
     return (
       <div className="flex aspect-video w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 bg-black p-8 text-center">
@@ -24,9 +26,14 @@ export function CameraFeed({ cameraOn, backendStatus }: CameraFeedProps) {
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-gray-200 shadow-sm">
-      <img
-        src={`${ENV.BACKEND_URL}/video_feed`}
-        alt="Signum Camera Stream"
+      <video
+        ref={videoRef}
+        style={{ display: "none" }}
+        playsInline
+        muted
+      />
+      <canvas
+        ref={canvasRef}
         className="aspect-video w-full object-cover"
       />
     </div>

@@ -5,14 +5,13 @@ import time
 import pickle
 import threading
 import numpy as np
-import cv2
-import mediapipe as mp
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from collections import deque
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-from gtts import gTTS
+from contextlib import asynccontextmanager
 
 # Add root folder to path so we can import lsm_utils
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -49,30 +48,54 @@ os.makedirs(DYNAMIC_DATA_DIR, exist_ok=True)
 os.makedirs(LETTERS_MOTION_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# Recording constants
-LETTER_SAMPLES_PER_RECORDING = 50
-WORD_SAMPLES_PER_RECORDING = 50
-DYNAMIC_FRAMES_PER_SEQUENCE = 50
-DYNAMICS_PER_SIGN = 3
-WORD_MAX_NAME_LEN = 30
+RECORDING_CONSTANTS = type("RC", (), {
+    "LETTER_SAMPLES": 50,
+    "WORD_SAMPLES": 50,
+    "DYNAMIC_FRAMES": 50,
+    "DYNAMICS_PER_SIGN": 3,
+    "WORD_MAX_NAME": 30,
+})()
+LETTER_SAMPLES_PER_RECORDING = RECORDING_CONSTANTS.LETTER_SAMPLES
+WORD_SAMPLES_PER_RECORDING = RECORDING_CONSTANTS.WORD_SAMPLES
+DYNAMIC_FRAMES_PER_SEQUENCE = RECORDING_CONSTANTS.DYNAMIC_FRAMES
+DYNAMICS_PER_SIGN = RECORDING_CONSTANTS.DYNAMICS_PER_SIGN
+WORD_MAX_NAME_LEN = RECORDING_CONSTANTS.WORD_MAX_NAME
 
-app = FastAPI(title="LSM Unified Capture, Training & Inference API")
+PREDICTION_BUFFER_SIZE = 5
+
+global_model = {"letter": None, "word": None, "word_encoder": None, "dynamic": None, "dynamic_encoder": None}
+
+prediction_buffers: dict[str, deque] = {
+    "letters": deque(maxlen=PREDICTION_BUFFER_SIZE),
+    "words": deque(maxlen=PREDICTION_BUFFER_SIZE),
+}
+
+def smooth_prediction(mode: str, raw_label: str) -> str:
+    buf = prediction_buffers[mode]
+    buf.append(raw_label)
+    counts: dict[str, int] = {}
+    for item in buf:
+        counts[item] = counts.get(item, 0) + 1
+    return max(counts, key=counts.get)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_lsm_model()
+    load_word_model()
+    load_dynamic_model()
+    print("Backend: Modelos cargados en startup.")
+    yield
+
+app = FastAPI(title="LSM Unified Capture, Training & Inference API", lifespan=lifespan)
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permits all origins for easy development
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Global variables for model
-model = None
-word_model = None
-word_label_encoder = None
-dynamic_model = None
-dynamic_label_encoder = None
 
 def load_lsm_model():
     global model
@@ -81,6 +104,7 @@ def load_lsm_model():
         try:
             with open(model_path, "rb") as f:
                 model = pickle.load(f)
+            global_model["letter"] = model
             print(f"Backend: modelo_lsm.pkl cargado exitosamente.")
             return True
         except Exception as e:
@@ -88,6 +112,7 @@ def load_lsm_model():
     else:
         print("Backend: modelo_lsm.pkl no encontrado. Corriendo en modo demo.")
         model = None
+        global_model["letter"] = None
         return False
 
 def load_word_model():
@@ -100,16 +125,22 @@ def load_word_model():
                 word_model = pickle.load(f)
             with open(encoder_path, "rb") as f:
                 word_label_encoder = pickle.load(f)
+            global_model["word"] = word_model
+            global_model["word_encoder"] = word_label_encoder
             print(f"Backend: modelo_palabras.pkl cargado exitosamente.")
             return True
         except Exception as e:
             print(f"Error al cargar modelo_palabras.pkl: {e}")
             word_model = None
             word_label_encoder = None
+            global_model["word"] = None
+            global_model["word_encoder"] = None
     else:
         print("Backend: modelo_palabras.pkl no encontrado.")
         word_model = None
         word_label_encoder = None
+        global_model["word"] = None
+        global_model["word_encoder"] = None
         return False
 
 def load_dynamic_model():
@@ -122,406 +153,130 @@ def load_dynamic_model():
                 dynamic_model = pickle.load(f)
             with open(encoder_path, "rb") as f:
                 dynamic_label_encoder = pickle.load(f)
+            global_model["dynamic"] = dynamic_model
+            global_model["dynamic_encoder"] = dynamic_label_encoder
             print(f"Backend: modelo_dinamico.pkl cargado exitosamente.")
             return True
         except Exception as e:
             print(f"Error al cargar modelo_dinamico.pkl: {e}")
             dynamic_model = None
             dynamic_label_encoder = None
+            global_model["dynamic"] = None
+            global_model["dynamic_encoder"] = None
     else:
         print("Backend: modelo_dinamico.pkl no encontrado.")
         dynamic_model = None
         dynamic_label_encoder = None
+        global_model["dynamic"] = None
+        global_model["dynamic_encoder"] = None
         return False
 
-# Initial attempt to load the models
-load_lsm_model()
-load_word_model()
-load_dynamic_model()
-
-class CameraManager:
+class PredictionState:
     def __init__(self):
-        self.cap = None
-        self.lock = threading.Lock()
-        self._running = False
-        self._thread = None
-
-        # State
         self.current_letter = ""
         self.current_confidence = 0.0
         self.hand_detected = False
-
-        # Word Prediction State
+        self.prediction_mode = "letters"
         self.current_word = ""
         self.current_word_confidence = 0.0
-
-        # Prediction Mode — only one model runs at a time
-        self.prediction_mode = "letters"  # "letters" | "words" | "dynamic"
-
-        # Recording State (always static, 50 samples)
-        self.is_recording = False
-        self.recording_letter = ""
-        self.recorded_samples = []
-
-        # Word Recording State (static, 50 samples)
-        self.is_recording_word = False
-        self.recording_word_name = ""
-        self.word_recorded_samples = []
-
-        # Dynamic Recording State (sequence of frames)
-        self.is_recording_dynamic = False
-        self.recording_dynamic_name = ""
-        self.dynamic_recorded_frames = []
-        self.dynamic_sequences_saved = 0
-
-        # Dynamic prediction buffer
-        self.dynamic_buffer = []
         self.current_dynamic = ""
         self.current_dynamic_confidence = 0.0
+        self.is_recording = False
+        self.recording_letter = ""
+        self.recorded_samples: list = []
+        self.is_recording_word = False
+        self.recording_word_name = ""
+        self.word_recorded_samples: list = []
+        self.is_recording_dynamic = False
+        self.recording_dynamic_name = ""
+        self.dynamic_recorded_frames: list = []
+        self.dynamic_sequences_saved = 0
+        self.dynamic_buffer: list = []
 
-        # MediaPipe Hands
-        self.mp_hands = mp.solutions.hands
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.hands = None
+state = PredictionState()
 
-        # Latest encoded JPEG frame for streaming
-        self._latest_frame = None
-        self._frame_event = threading.Event()
+class LandmarksInput(BaseModel):
+    landmarks: List[float]
 
-    def start(self):
-        with self.lock:
-            if self._running:
-                return
-            print("CameraManager: Abriendo camara fisica (indice 0)...")
-            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-            if not self.cap.isOpened() or not self.cap.read()[0]:
-                print("CameraManager: DSHOW fallo para index 0. Intentando default...")
-                self.cap = cv2.VideoCapture(0)
-            if not self.cap.isOpened() or not self.cap.read()[0]:
-                print("CameraManager: Camara index 0 fallo. Intentando index 1...")
-                self.cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
-            if not self.cap.isOpened() or not self.cap.read()[0]:
-                self.cap = cv2.VideoCapture(1)
-            
-            if not self.cap.isOpened():
-                print("CameraManager: ERROR: No se pudo abrir ninguna camara (0 o 1).")
-                self.cap = None
-                return
+class LandmarksBatchInput(BaseModel):
+    frames: List[LandmarksInput]
 
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            load_lsm_model()
-            self.hands = self.mp_hands.Hands(
-                static_image_mode=False,
-                max_num_hands=2,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            self._running = True
-            self._thread = threading.Thread(target=self._capture_loop, daemon=True)
-            self._thread.start()
+@app.websocket("/ws/predict")
+async def ws_predict(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_json()
+            landmarks = data.get("landmarks", [])
+            mode = data.get("mode", state.prediction_mode)
 
-    def stop(self):
-        with self.lock:
-            self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=3)
-            self._thread = None
-        with self.lock:
-            if self.cap is not None:
-                print("CameraManager: Cerrando camara y liberando recursos...")
-                self.cap.release()
-                self.cap = None
-            if self.hands is not None:
-                self.hands.close()
-                self.hands = None
-            self.current_letter = ""
-            self.current_confidence = 0.0
-            self.hand_detected = False
+            result = {"letter": "", "confidence": 0.0, "word": "", "word_confidence": 0.0,
+                      "dynamic_sign": "", "dynamic_confidence": 0.0, "hand_detected": False}
 
-    def _capture_loop(self):
-        """Background thread that captures frames, runs MediaPipe + model inference,
-        and stores the latest JPEG for the streaming endpoint."""
-        global model
-        try:
-            while self._running:
-                with self.lock:
-                    if self.cap is None or not self.cap.isOpened():
-                        break
-                    ret, frame = self.cap.read()
+            if len(landmarks) == 63:
+                arr = np.array(landmarks).reshape(1, -1)
 
-                if not ret:
-                    time.sleep(0.01)
-                    continue
-
-                # Mirror effect
-                frame = cv2.flip(frame, 1)
-                h, w, _ = frame.shape
-
-                # MediaPipe
-                image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image_rgb.flags.writeable = False
-
-                letter_pred = ""
-                conf_pred = 0.0
-                detected = False
-
-                results = None
-                if self.hands:
+                if mode == "letters" and model:
                     try:
-                        results = self.hands.process(image_rgb)
+                        pred = model.predict(arr)[0]
+                        probs = model.predict_proba(arr)[0]
+                        idx_max = int(np.argmax(probs))
+                        conf = float(probs[idx_max] * 100)
+                        raw_label = str(pred)
+                        smoothed = smooth_prediction("letters", raw_label)
+                        result["letter"] = smoothed
+                        result["confidence"] = round(conf, 1)
+                        result["hand_detected"] = True
+                        state.current_letter = smoothed
+                        state.current_confidence = conf
+                        state.hand_detected = True
                     except Exception as e:
-                        print(f"MediaPipe process error (recuperable): {e}")
+                        print(f"WS prediction error: {e}")
 
-                hand_idx = -1
-                if results and results.multi_hand_landmarks:
-                    detected = True
-                    for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                        # Draw skeleton
-                        self.mp_drawing.draw_landmarks(
-                            frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS,
-                            self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=4),
-                            self.mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2, circle_radius=2)
-                        )
-
-                # Capture samples if recording (any hand)
-                if self.is_recording and self.recording_letter and hand_idx >= 0:
+                elif mode == "words" and word_model and word_label_encoder:
                     try:
-                        datos_normalizados = normalize_landmarks(hand_landmarks)
-                        self.recorded_samples.append(datos_normalizados)
-                        if len(self.recorded_samples) >= LETTER_SAMPLES_PER_RECORDING:
-                            datos_np = np.array(self.recorded_samples)
-                            out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_lsm"))
-                            os.makedirs(out_dir, exist_ok=True)
-                            out_path = os.path.join(out_dir, f"datos_{self.recording_letter.upper()}.npy")
-                            np.save(out_path, datos_np)
-                            print(f"CameraManager: Grabadas {LETTER_SAMPLES_PER_RECORDING} muestras de '{self.recording_letter}' en {out_path}")
-                            self.is_recording = False
+                        probs = word_model.predict_proba(arr)[0]
+                        idx_max = int(np.argmax(probs))
+                        conf = float(probs[idx_max] * 100)
+                        if conf > 30:
+                            word_name = word_label_encoder.inverse_transform([idx_max])[0]
+                            raw_label = str(word_name)
+                            smoothed = smooth_prediction("words", raw_label)
+                            result["word"] = smoothed
+                            result["word_confidence"] = round(conf, 1)
+                            result["hand_detected"] = True
+                            state.current_word = smoothed
+                            state.current_word_confidence = conf
+                        else:
+                            prediction_buffers["words"].clear()
                     except Exception as e:
-                        print(f"Error en grabación: {e}")
+                        print(f"WS word prediction error: {e}")
 
-                # Word capture (static, 50 samples)
-                if self.is_recording_word and self.recording_word_name and hand_idx >= 0:
-                    try:
-                        datos_normalizados = normalize_landmarks(hand_landmarks)
-                        self.word_recorded_samples.append(datos_normalizados)
-
-                        if len(self.word_recorded_samples) >= WORD_SAMPLES_PER_RECORDING:
-                            out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_palabras"))
-                            os.makedirs(out_dir, exist_ok=True)
-                            safe_name = "".join(c for c in self.recording_word_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
-                            datos_np = np.array(self.word_recorded_samples)
-                            out_path = os.path.join(out_dir, f"palabra_{safe_name}.npy")
-                            np.save(out_path, datos_np)
-                            print(f"CameraManager: Grabadas {WORD_SAMPLES_PER_RECORDING} muestras de '{self.recording_word_name}' en {out_path}")
-                            self.is_recording_word = False
-                    except Exception as e:
-                        print(f"Error en grabación de palabra: {e}")
-
-                # Dynamic capture (sequence of frames for movement-based signs)
-                if self.is_recording_dynamic and self.recording_dynamic_name and hand_idx >= 0:
-                    try:
-                        datos_normalizados = normalize_landmarks(hand_landmarks)
-                        self.dynamic_recorded_frames.append(datos_normalizados)
-
-                        if len(self.dynamic_recorded_frames) >= DYNAMIC_FRAMES_PER_SEQUENCE:
-                            out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_dinamicos"))
-                            os.makedirs(out_dir, exist_ok=True)
-                            safe_name = "".join(c for c in self.recording_dynamic_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
-                            seq_np = np.array(self.dynamic_recorded_frames)
-                            timestamp = int(time.time() * 1000)
-                            out_path = os.path.join(out_dir, f"din_{safe_name}_{timestamp}.npy")
-                            np.save(out_path, seq_np)
-                            self.dynamic_sequences_saved += 1
-                            print(f"CameraManager: Secuencia {self.dynamic_sequences_saved}/{DYNAMICS_PER_SIGN} de '{self.recording_dynamic_name}' guardada ({DYNAMIC_FRAMES_PER_SEQUENCE} frames)")
-                            self.dynamic_recorded_frames = []
-                            if self.dynamic_sequences_saved >= DYNAMICS_PER_SIGN:
-                                print(f"CameraManager: {DYNAMICS_PER_SIGN} secuencias de '{self.recording_dynamic_name}' completadas.")
-                                self.is_recording_dynamic = False
-                    except Exception as e:
-                        print(f"Error en grabación dinámica: {e}")
-
-                # Dynamic prediction buffer (always accumulate when in dynamic mode)
-                if self.prediction_mode == "dynamic" and detected and hand_idx >= 0:
-                    try:
-                        datos_normalizados = normalize_landmarks(hand_landmarks)
-                        self.dynamic_buffer.append(datos_normalizados)
-                        if len(self.dynamic_buffer) > DYNAMIC_FRAMES_PER_SEQUENCE:
-                            self.dynamic_buffer = self.dynamic_buffer[-DYNAMIC_FRAMES_PER_SEQUENCE:]
-                    except Exception as e:
-                        pass
-
-                # Prediction — only run the active mode's model
-                if self.prediction_mode == "letters":
-                    if detected and model and not self.is_recording and not self.is_recording_word and not self.is_recording_dynamic:
+                elif mode == "dynamic" and dynamic_model and dynamic_label_encoder:
+                    state.dynamic_buffer.append(landmarks)
+                    if len(state.dynamic_buffer) > DYNAMIC_FRAMES_PER_SEQUENCE:
+                        state.dynamic_buffer = state.dynamic_buffer[-DYNAMIC_FRAMES_PER_SEQUENCE:]
+                    if len(state.dynamic_buffer) == DYNAMIC_FRAMES_PER_SEQUENCE:
                         try:
-                            datos_normalizados = normalize_landmarks(hand_landmarks)
-                            pred = model.predict([datos_normalizados])[0]
-                            probs = model.predict_proba([datos_normalizados])[0]
-                            idx_max = np.argmax(probs)
-                            this_conf = float(probs[idx_max] * 100)
-                            if this_conf > conf_pred:
-                                conf_pred = this_conf
-                                letter_pred = str(pred)
-                        except Exception as e:
-                            print(f"Error en prediccion: {e}")
-                    self.current_word = ""
-                    self.current_word_confidence = 0.0
-                    self.current_dynamic = ""
-                    self.current_dynamic_confidence = 0.0
-
-                elif self.prediction_mode == "words":
-                    self.current_letter = ""
-                    self.current_confidence = 0.0
-                    letter_pred = ""
-                    conf_pred = 0.0
-                    self.current_dynamic = ""
-                    self.current_dynamic_confidence = 0.0
-
-                    if detected and word_model and not self.is_recording and not self.is_recording_word and not self.is_recording_dynamic:
-                        try:
-                            datos_normalizados = normalize_landmarks(hand_landmarks)
-                            pred_word = word_model.predict([datos_normalizados])[0]
-                            probs_word = word_model.predict_proba([datos_normalizados])[0]
-                            idx_max = np.argmax(probs_word)
-                            word_conf = float(probs_word[idx_max] * 100)
-                            if word_conf > 30:
-                                word_name = word_label_encoder.inverse_transform([idx_max])[0]
-                                self.current_word = str(word_name)
-                                self.current_word_confidence = word_conf
-                            else:
-                                self.current_word = ""
-                                self.current_word_confidence = 0.0
-                        except Exception as e:
-                            pass
-                    else:
-                        self.current_word = ""
-                        self.current_word_confidence = 0.0
-
-                elif self.prediction_mode == "dynamic":
-                    self.current_letter = ""
-                    self.current_confidence = 0.0
-                    letter_pred = ""
-                    conf_pred = 0.0
-                    self.current_word = ""
-                    self.current_word_confidence = 0.0
-
-                    if len(self.dynamic_buffer) == DYNAMIC_FRAMES_PER_SEQUENCE and dynamic_model and not self.is_recording_dynamic:
-                        try:
-                            seq_flattened = np.array(self.dynamic_buffer).flatten().reshape(1, -1)
-                            pred_idx = dynamic_model.predict(seq_flattened)[0]
+                            seq_flattened = np.array(state.dynamic_buffer).flatten().reshape(1, -1)
                             probs = dynamic_model.predict_proba(seq_flattened)[0]
-                            idx_max = np.argmax(probs)
-                            dyn_conf = float(probs[idx_max] * 100)
-                            if dyn_conf > 30:
-                                sign_name = dynamic_label_encoder.inverse_transform([pred_idx])[0]
-                                self.current_dynamic = str(sign_name)
-                                self.current_dynamic_confidence = dyn_conf
-                            else:
-                                self.current_dynamic = ""
-                                self.current_dynamic_confidence = 0.0
+                            idx_max = int(np.argmax(probs))
+                            conf = float(probs[idx_max] * 100)
+                            if conf > 30:
+                                sign_name = dynamic_label_encoder.inverse_transform([int(dynamic_model.predict(seq_flattened)[0])])[0]
+                                result["dynamic_sign"] = str(sign_name)
+                                result["dynamic_confidence"] = round(conf, 1)
+                                result["hand_detected"] = True
+                                state.current_dynamic = str(sign_name)
+                                state.current_dynamic_confidence = conf
                         except Exception as e:
-                            print(f"Error en prediccion dinamica: {e}")
-                            self.current_dynamic = ""
-                            self.current_dynamic_confidence = 0.0
-                    else:
-                        self.current_dynamic = ""
-                        self.current_dynamic_confidence = 0.0
+                            print(f"WS dynamic prediction error: {e}")
 
-                self.hand_detected = detected
-                self.current_letter = letter_pred
-                self.current_confidence = conf_pred
-
-                # HUD overlay on the video frame
-                if self.is_recording:
-                    cv2.circle(frame, (30, 30), 8, (0, 0, 255), -1)
-                    cv2.putText(frame, f"GRABANDO '{self.recording_letter}': {len(self.recorded_samples)}/{LETTER_SAMPLES_PER_RECORDING} MUESTRAS",
-                        (48, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
-                    bar_w = int(w * (len(self.recorded_samples) / LETTER_SAMPLES_PER_RECORDING))
-                    cv2.rectangle(frame, (0, h - 8), (bar_w, h), (0, 0, 255), -1)
-                elif self.is_recording_word:
-                    cv2.circle(frame, (30, 30), 8, (0, 165, 255), -1)
-                    sample_count = len(self.word_recorded_samples)
-                    cv2.putText(frame, f"GRABANDO PALABRA '{self.recording_word_name}': {sample_count}/{WORD_SAMPLES_PER_RECORDING} MUESTRAS",
-                        (48, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
-                    bar_w = int(w * (sample_count / WORD_SAMPLES_PER_RECORDING))
-                    cv2.rectangle(frame, (0, h - 8), (bar_w, h), (0, 165, 255), -1)
-                elif self.is_recording_dynamic:
-                    cv2.circle(frame, (30, 30), 8, (255, 0, 255), -1)
-                    frame_count = len(self.dynamic_recorded_frames)
-                    progress = self.dynamic_sequences_saved + (frame_count / DYNAMIC_FRAMES_PER_SEQUENCE)
-                    total = DYNAMICS_PER_SIGN
-                    cv2.putText(frame, f"DINAMICO '{self.recording_dynamic_name}': seq {self.dynamic_sequences_saved+1}/{total} ({frame_count}/{DYNAMIC_FRAMES_PER_SEQUENCE})",
-                        (48, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
-                    bar_w = int(w * (progress / total))
-                    cv2.rectangle(frame, (0, h - 8), (bar_w, h), (255, 0, 255), -1)
-                else:
-                    if self.prediction_mode == "dynamic":
-                        if not dynamic_model:
-                            cv2.putText(frame, "MODO DEMO - SIN MODELO DINAMICO", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
-                        elif detected and self.current_dynamic:
-                            cv2.putText(frame, f"DINAMICO: {self.current_dynamic} ({self.current_dynamic_confidence:.1f}%)", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                        else:
-                            buf_len = len(self.dynamic_buffer)
-                            cv2.putText(frame, f"DINAMICO - Buffer: {buf_len}/{DYNAMIC_FRAMES_PER_SEQUENCE}", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
-                    elif self.prediction_mode == "words":
-                        if not word_model:
-                            cv2.putText(frame, "MODO DEMO - SIN MODELO DE PALABRAS", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-                        elif detected and self.current_word:
-                            cv2.putText(frame, f"PALABRA: {self.current_word} ({self.current_word_confidence:.1f}%)", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                        else:
-                            cv2.putText(frame, "ESPERANDO MANO...", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                    else:
-                        if not model:
-                            cv2.putText(frame, "MODO DEMO - SIN MODELO ENTRENADO", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-                        elif detected and letter_pred:
-                            cv2.putText(frame, f"LSM: {letter_pred} ({conf_pred:.1f}%)", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                        else:
-                            cv2.putText(frame, "ESPERANDO MANO...", (15, 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-
-                # Encode and store latest frame (ALWAYS, regardless of recording state)
-                ret_enc, jpeg = cv2.imencode('.jpg', frame)
-                if ret_enc:
-                    self._latest_frame = jpeg.tobytes()
-                    self._frame_event.set()
-
-                time.sleep(0.033)  # ~30 FPS
-        except Exception as ex:
-            print(f"Error fatal en loop de camara: {ex}")
-        finally:
-            with self.lock:
-                self._running = False
-                if self.cap is not None:
-                    print("CameraManager: Hilo terminado, liberando camara...")
-                    self.cap.release()
-                    self.cap = None
-                if self.hands is not None:
-                    self.hands.close()
-                    self.hands = None
-
-    def stream_frames(self):
-        """Generator that yields MJPEG frames from the background capture thread."""
-        self.start()
-        while self._running:
-            if self._latest_frame:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + self._latest_frame + b'\r\n')
-            # short sleep to avoid busy loop
-            time.sleep(0.03)
-
-# Instantiate global camera manager
-camera_manager = CameraManager()
+            await websocket.send_json(result)
+    except WebSocketDisconnect:
+        print("WebSocket client disconnected")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
 
 @app.get("/health")
 def health():
@@ -530,61 +285,83 @@ def health():
         "model_loaded": model is not None,
         "word_model_loaded": word_model is not None,
         "dynamic_model_loaded": dynamic_model is not None,
-        "camera_active": camera_manager.cap is not None
+        "camera_active": True,
     }
 
-@app.get("/video_feed")
-def video_feed():
-    """MJPEG streaming endpoint — reads from the background capture thread."""
-    return StreamingResponse(
-        camera_manager.stream_frames(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
-    )
+@app.post("/predict_landmarks")
+async def predict_landmarks(request: LandmarksInput):
+    if not model:
+        raise HTTPException(status_code=400, detail="Modelo no cargado.")
+    arr = np.array(request.landmarks).reshape(1, -1)
+    try:
+        pred = model.predict(arr)[0]
+        probs = model.predict_proba(arr)[0]
+        idx_max = int(np.argmax(probs))
+        conf = float(probs[idx_max] * 100)
+        raw_label = str(pred)
+        smoothed = smooth_prediction("letters", raw_label)
+        return {"letter": smoothed, "confidence": round(conf, 1)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/predict_word_landmarks")
+async def predict_word_landmarks(request: LandmarksInput):
+    if not word_model or not word_label_encoder:
+        raise HTTPException(status_code=400, detail="Modelo de palabras no cargado.")
+    arr = np.array(request.landmarks).reshape(1, -1)
+    try:
+        probs = word_model.predict_proba(arr)[0]
+        idx_max = int(np.argmax(probs))
+        conf = float(probs[idx_max] * 100)
+        if conf > 30:
+            word_name = word_label_encoder.inverse_transform([idx_max])[0]
+            raw_label = str(word_name)
+            smoothed = smooth_prediction("words", raw_label)
+            return {"word": smoothed, "confidence": round(conf, 1)}
+        return {"word": "", "confidence": 0.0}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/prediction")
 def get_prediction():
-    """Retrieve the current sign language prediction and recording metadata"""
     return {
-        "letter": camera_manager.current_letter,
-        "confidence": camera_manager.current_confidence,
-        "hand_detected": camera_manager.hand_detected,
+        "letter": state.current_letter,
+        "confidence": state.current_confidence,
+        "hand_detected": state.hand_detected,
         "model_loaded": model is not None,
-        "is_recording": camera_manager.is_recording,
-        "recording_letter": camera_manager.recording_letter,
-        "recorded_samples_count": len(camera_manager.recorded_samples),
-        "prediction_mode": camera_manager.prediction_mode,
-        "word": camera_manager.current_word,
-        "word_confidence": camera_manager.current_word_confidence,
-        "is_recording_word": camera_manager.is_recording_word,
-        "recording_word_name": camera_manager.recording_word_name,
-        "word_recorded_samples_count": len(camera_manager.word_recorded_samples),
+        "is_recording": state.is_recording,
+        "recording_letter": state.recording_letter,
+        "recorded_samples_count": len(state.recorded_samples),
+        "prediction_mode": state.prediction_mode,
+        "word": state.current_word,
+        "word_confidence": state.current_word_confidence,
+        "is_recording_word": state.is_recording_word,
+        "recording_word_name": state.recording_word_name,
+        "word_recorded_samples_count": len(state.word_recorded_samples),
         "word_model_loaded": word_model is not None,
-        "dynamic_sign": camera_manager.current_dynamic,
-        "dynamic_confidence": camera_manager.current_dynamic_confidence,
-        "is_recording_dynamic": camera_manager.is_recording_dynamic,
-        "recording_dynamic_name": camera_manager.recording_dynamic_name,
-        "dynamic_recorded_frames": len(camera_manager.dynamic_recorded_frames),
-        "dynamic_sequences_saved": camera_manager.dynamic_sequences_saved,
-        "dynamic_buffer_len": len(camera_manager.dynamic_buffer),
+        "dynamic_sign": state.current_dynamic,
+        "dynamic_confidence": state.current_dynamic_confidence,
+        "is_recording_dynamic": state.is_recording_dynamic,
+        "recording_dynamic_name": state.recording_dynamic_name,
+        "dynamic_recorded_frames": len(state.dynamic_recorded_frames),
+        "dynamic_sequences_saved": state.dynamic_sequences_saved,
+        "dynamic_buffer_len": len(state.dynamic_buffer),
         "dynamic_model_loaded": dynamic_model is not None,
     }
 
 @app.post("/camera/stop")
 def stop_camera():
-    """Forcefully stops the physical camera and releases all resources"""
-    camera_manager.stop()
-    return {"msg": "Camara apagada correctamente"}
+    return {"msg": "Camara gestionada por el frontend (MediaPipe en navegador)"}
 
 @app.post("/start_capture/{letter}")
 async def start_capture(letter: str):
-    """Starts capturing 50 samples of the specified letter on the backend"""
     if not letter.isalpha() or len(letter) != 1:
         raise HTTPException(status_code=400, detail="La letra debe ser un solo caracter alfabetico.")
     
-    camera_manager.is_recording_word = False
-    camera_manager.recorded_samples = []
-    camera_manager.recording_letter = letter.upper()
-    camera_manager.is_recording = True
+    state.is_recording_word = False
+    state.recorded_samples = []
+    state.recording_letter = letter.upper()
+    state.is_recording = True
     print(f"Backend: Iniciando captura estatica para la letra '{letter.upper()}'")
     return {"msg": f"Captura iniciada para la letra '{letter.upper()}'", "samples_needed": LETTER_SAMPLES_PER_RECORDING}
 
@@ -666,13 +443,13 @@ async def start_capture_word(word_name: str):
     if not all(c.isalnum() or c in "_ " for c in word_name):
         raise HTTPException(status_code=400, detail="Solo se permiten letras, numeros, espacios y guion bajo.")
 
-    if camera_manager.is_recording_word:
+    if state.is_recording_word:
         raise HTTPException(status_code=400, detail="Ya hay una grabación de palabra en curso.")
 
-    camera_manager.is_recording = False
-    camera_manager.word_recorded_samples = []
-    camera_manager.recording_word_name = word_name
-    camera_manager.is_recording_word = True
+    state.is_recording = False
+    state.word_recorded_samples = []
+    state.recording_word_name = word_name
+    state.is_recording_word = True
     print(f"Backend: Iniciando captura de {WORD_SAMPLES_PER_RECORDING} muestras para la palabra '{word_name}'")
     return {"msg": f"Captura iniciada para la palabra '{word_name}'", "samples_needed": WORD_SAMPLES_PER_RECORDING}
 
@@ -680,12 +457,12 @@ async def start_capture_word(word_name: str):
 @app.post("/stop_capture_word")
 async def stop_capture_word():
     """Stops the current word recording, saving whatever has been captured so far"""
-    if not camera_manager.is_recording_word:
+    if not state.is_recording_word:
         return {"msg": "No hay grabación de palabra en curso."}
 
-    word_name = camera_manager.recording_word_name
-    samples = camera_manager.word_recorded_samples
-    camera_manager.is_recording_word = False
+    word_name = state.recording_word_name
+    samples = state.word_recorded_samples
+    state.is_recording_word = False
 
     if len(samples) > 0:
         out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_palabras"))
@@ -809,15 +586,15 @@ async def start_capture_dynamic(sign_name: str):
     if not all(c.isalnum() or c in "_ " for c in sign_name):
         raise HTTPException(status_code=400, detail="Solo se permiten letras, numeros, espacios y guion bajo.")
 
-    if camera_manager.is_recording_dynamic:
+    if state.is_recording_dynamic:
         raise HTTPException(status_code=400, detail="Ya hay una grabacion dinamica en curso.")
 
-    camera_manager.is_recording = False
-    camera_manager.is_recording_word = False
-    camera_manager.dynamic_recorded_frames = []
-    camera_manager.recording_dynamic_name = sign_name
-    camera_manager.dynamic_sequences_saved = 0
-    camera_manager.is_recording_dynamic = True
+    state.is_recording = False
+    state.is_recording_word = False
+    state.dynamic_recorded_frames = []
+    state.recording_dynamic_name = sign_name
+    state.dynamic_sequences_saved = 0
+    state.is_recording_dynamic = True
     print(f"Backend: Iniciando captura dinamica de {DYNAMICS_PER_SIGN} secuencias x {DYNAMIC_FRAMES_PER_SEQUENCE} frames para '{sign_name}'")
     return {
         "msg": f"Captura dinamica iniciada para '{sign_name}'",
@@ -828,20 +605,20 @@ async def start_capture_dynamic(sign_name: str):
 @app.post("/stop_capture_dynamic")
 async def stop_capture_dynamic():
     """Stops the current dynamic recording, saving whatever has been captured so far"""
-    if not camera_manager.is_recording_dynamic:
+    if not state.is_recording_dynamic:
         return {"msg": "No hay grabacion dinamica en curso."}
 
-    sign_name = camera_manager.recording_dynamic_name
-    saved = camera_manager.dynamic_sequences_saved
-    remaining_frames = len(camera_manager.dynamic_recorded_frames)
-    camera_manager.is_recording_dynamic = False
-    camera_manager.dynamic_recorded_frames = []
+    sign_name = state.recording_dynamic_name
+    saved = state.dynamic_sequences_saved
+    remaining_frames = len(state.dynamic_recorded_frames)
+    state.is_recording_dynamic = False
+    state.dynamic_recorded_frames = []
 
     if remaining_frames > 0:
         out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_dinamicos"))
         os.makedirs(out_dir, exist_ok=True)
         safe_name = "".join(c for c in sign_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
-        seq_np = np.array(camera_manager.dynamic_recorded_frames[:DYNAMIC_FRAMES_PER_SEQUENCE])
+        seq_np = np.array(state.dynamic_recorded_frames[:DYNAMIC_FRAMES_PER_SEQUENCE])
         if len(seq_np) > 0:
             timestamp = int(time.time() * 1000)
             out_path = os.path.join(out_dir, f"din_{safe_name}_{timestamp}.npy")
@@ -955,101 +732,34 @@ async def delete_dynamic(sign_name: str):
 
     return {"msg": f"Datos de '{sign_name}' eliminados ({len(archivos)} secuencias)."}
 
-class Frame(BaseModel):
-    landmarks: List[float]
+@app.post("/record_landmarks")
+async def record_landmarks(request: LandmarksInput):
+    if state.is_recording and state.recording_letter:
+        state.recorded_samples.append(request.landmarks)
+        if len(state.recorded_samples) >= LETTER_SAMPLES_PER_RECORDING:
+            datos_np = np.array(state.recorded_samples)
+            out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_lsm"))
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, f"datos_{state.recording_letter.upper()}.npy")
+            np.save(out_path, datos_np)
+            print(f"Backend: Grabadas {LETTER_SAMPLES_PER_RECORDING} muestras de '{state.recording_letter}'")
+            state.is_recording = False
+        return {"status": "recording", "samples": len(state.recorded_samples)}
+    
+    if state.is_recording_word and state.recording_word_name:
+        state.word_recorded_samples.append(request.landmarks)
+        if len(state.word_recorded_samples) >= WORD_SAMPLES_PER_RECORDING:
+            datos_np = np.array(state.word_recorded_samples)
+            out_dir = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "datos_palabras"))
+            os.makedirs(out_dir, exist_ok=True)
+            safe_name = "".join(c for c in state.recording_word_name if c.isalnum() or c in "_ ").strip().replace(" ", "_")
+            out_path = os.path.join(out_dir, f"palabra_{safe_name}.npy")
+            np.save(out_path, datos_np)
+            print(f"Backend: Grabadas {WORD_SAMPLES_PER_RECORDING} muestras de '{state.recording_word_name}'")
+            state.is_recording_word = False
+        return {"status": "recording_word", "samples": len(state.word_recorded_samples)}
 
-class PredictRequest(BaseModel):
-    frames: List[Frame]
-
-@app.post("/predict")
-async def predict_compatibility(request: PredictRequest):
-    return {"text": "A"}
-
-# ---------- TTS Endpoint (with in-memory cache) ----------
-tts_cache: dict[str, bytes] = {}
-tts_cache_lock = threading.Lock()
-
-def _generate_tts_bytes(text: str) -> bytes:
-    """Generate TTS audio bytes for a given text, using cache."""
-    key = text.strip().lower()
-    with tts_cache_lock:
-        if key in tts_cache:
-            return tts_cache[key]
-    # Generate outside lock to avoid blocking other requests
-    tts = gTTS(text=text, lang="es")
-    fp = io.BytesIO()
-    tts.write_to_fp(fp)
-    audio_bytes = fp.getvalue()
-    with tts_cache_lock:
-        tts_cache[key] = audio_bytes
-    return audio_bytes
-
-def _precache_single(ch: str, timeout: float = 5.0) -> bool:
-    """Try to generate TTS for a single character with a timeout."""
-    result = [False]
-    def _inner():
-        try:
-            _generate_tts_bytes(ch)
-            result[0] = True
-        except Exception:
-            pass
-    t = threading.Thread(target=_inner, daemon=True)
-    t.start()
-    t.join(timeout=timeout)
-    return result[0]
-
-def _precache_letters():
-    """Pre-generate TTS for all 26 letters so first playback is instant."""
-    import string
-    print("TTS Cache: Pre-generando audio para las 26 letras...")
-    cached = 0
-    failed = []
-    for i, ch in enumerate(string.ascii_uppercase):
-        success = False
-        for attempt in range(2):
-            if _precache_single(ch, timeout=6.0):
-                success = True
-                break
-            time.sleep(0.5)
-        if success:
-            cached += 1
-            print(f"  TTS [{i+1}/26] '{ch}' OK")
-        else:
-            failed.append(ch)
-            print(f"  TTS [{i+1}/26] '{ch}' FALLO (timeout/error)")
-        time.sleep(0.2)  # small delay to avoid rate limits
-    print(f"TTS Cache: {cached}/26 letras cacheadas. Fallos: {failed if failed else 'ninguno'}")
-
-# Pre-cache in background thread so server starts instantly
-threading.Thread(target=_precache_letters, daemon=True).start()
-
-class TTSRequest(BaseModel):
-    text: str
-
-@app.post("/tts")
-async def tts_post(request: TTSRequest):
-    text = request.text
-    if not text:
-        raise HTTPException(status_code=400, detail="Text required")
-    try:
-        audio_bytes = _generate_tts_bytes(text)
-        return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/mpeg")
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/tts")
-def tts_get(text: str):
-    if not text:
-        raise HTTPException(status_code=400, detail="Text required")
-    try:
-        audio_bytes = _generate_tts_bytes(text)
-        return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/mpeg")
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "idle"}
 
 # ---------- Prediction Mode Endpoints ----------
 
@@ -1058,29 +768,29 @@ async def set_prediction_mode(mode: str):
     """Set the prediction mode to 'letters', 'words', or 'dynamic'"""
     if mode not in ("letters", "words", "dynamic"):
         raise HTTPException(status_code=400, detail="Mode must be 'letters', 'words', or 'dynamic'")
-    camera_manager.prediction_mode = mode
-    camera_manager.current_letter = ""
-    camera_manager.current_confidence = 0.0
-    camera_manager.current_word = ""
-    camera_manager.current_word_confidence = 0.0
-    camera_manager.current_dynamic = ""
-    camera_manager.current_dynamic_confidence = 0.0
-    camera_manager.dynamic_buffer = []
-    if camera_manager.is_recording:
-        camera_manager.is_recording = False
-        camera_manager.recorded_samples = []
-    if camera_manager.is_recording_word:
-        camera_manager.is_recording_word = False
-        camera_manager.word_recorded_samples = []
-    if camera_manager.is_recording_dynamic:
-        camera_manager.is_recording_dynamic = False
-        camera_manager.dynamic_recorded_frames = []
+    state.prediction_mode = mode
+    state.current_letter = ""
+    state.current_confidence = 0.0
+    state.current_word = ""
+    state.current_word_confidence = 0.0
+    state.current_dynamic = ""
+    state.current_dynamic_confidence = 0.0
+    state.dynamic_buffer = []
+    if state.is_recording:
+        state.is_recording = False
+        state.recorded_samples = []
+    if state.is_recording_word:
+        state.is_recording_word = False
+        state.word_recorded_samples = []
+    if state.is_recording_dynamic:
+        state.is_recording_dynamic = False
+        state.dynamic_recorded_frames = []
     print(f"Backend: Modo de prediccion cambiado a '{mode}'")
     return {"msg": f"Prediction mode set to '{mode}'", "mode": mode}
 
 @app.get("/prediction_mode")
 def get_prediction_mode():
-    return {"mode": camera_manager.prediction_mode}
+    return {"mode": state.prediction_mode}
 
 # ---------- Compatibility Endpoints to Support Frontend/Backend Route Differences ----------
 
@@ -1109,12 +819,12 @@ async def delete_word_alias(word_name: str):
 @app.post("/recording/stop")
 def stop_recording():
     """Stops all recording types"""
-    camera_manager.is_recording = False
-    camera_manager.is_recording_word = False
-    camera_manager.is_recording_dynamic = False
-    camera_manager.recorded_samples = []
-    camera_manager.word_recorded_samples = []
-    camera_manager.dynamic_recorded_frames = []
+    state.is_recording = False
+    state.is_recording_word = False
+    state.is_recording_dynamic = False
+    state.recorded_samples = []
+    state.word_recorded_samples = []
+    state.dynamic_recorded_frames = []
     return {"msg": "Grabación detenida correctamente"}
 
 

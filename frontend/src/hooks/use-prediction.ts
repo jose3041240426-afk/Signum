@@ -29,12 +29,11 @@ const DEFAULT_PREDICTION: PredictionData = {
 
 export function usePrediction(backendStatus: "checking" | "online" | "offline") {
   const [data, setData] = useState<PredictionData>(DEFAULT_PREDICTION);
-  const [cameraOn, setCameraOn] = useState(true);
 
   useEffect(() => {
     let id: ReturnType<typeof setInterval> | null = null;
 
-    if (backendStatus === "online" && cameraOn) {
+    if (backendStatus === "online") {
       id = setInterval(async () => {
         try {
           const next = await getPrediction();
@@ -42,24 +41,13 @@ export function usePrediction(backendStatus: "checking" | "online" | "offline") 
         } catch {
           /* silent */
         }
-      }, 100);
+      }, 500);
     }
 
     return () => {
       if (id) clearInterval(id);
     };
-  }, [backendStatus, cameraOn]);
+  }, [backendStatus]);
 
-  const toggleCamera = async () => {
-    if (cameraOn) {
-      try {
-        await fetch("http://localhost:8000/camera/stop", { method: "POST" });
-      } catch {
-        /* no-op */
-      }
-    }
-    setCameraOn((prev) => !prev);
-  };
-
-  return { data, cameraOn, toggleCamera };
+  return { data };
 }

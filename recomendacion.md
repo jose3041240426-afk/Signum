@@ -41,5 +41,3 @@ Aumento de datos (Data Augmentation): En lugar de pedirle al usuario que mueva l
 Fondo y luz: Asegúrate de capturar el dataset con diferentes fondos (pared blanca, cuarto oscuro, exterior) para que el modelo no se confunda por el entorno, aunque MediaPipe es bastante robusto con esto.
 Resumen de mi recomendación principal:
 Tu base de código es fantástica. El siguiente salto evolutivo es mover la detección de la cámara (MediaPipe) al navegador en Next.js, dejar que FastAPI solo haga cálculos matemáticos ligeros con el modelo, y usar la voz nativa del navegador en lugar de gTTS en el backend.
-
-¿Quieres que te muestre un ejemplo de cómo sería ese endpoint en FastAPI para recibir los 63 números y devolver la predicción al instante?
