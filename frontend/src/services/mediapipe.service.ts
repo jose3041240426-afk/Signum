@@ -40,6 +40,8 @@ export async function initMediaPipe(
     canvasElement.height = videoElement.videoHeight || 480;
     ctx.save();
     ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    ctx.translate(canvasElement.width, 0);
+    ctx.scale(-1, 1);
     ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
     // Holistic uses leftHandLandmarks / rightHandLandmarks (NOT multiHandLandmarks)
@@ -143,11 +145,11 @@ export async function initMediaPipe(
 export async function stopMediaPipe(): Promise<void> {
   isRunning = false;
   if (cameraInstance) {
-    try { cameraInstance.stop(); } catch {}
+    try { cameraInstance.stop(); } catch { }
     cameraInstance = null;
   }
   if (holisticInstance) {
-    try { holisticInstance.close(); } catch {}
+    try { holisticInstance.close(); } catch { }
     holisticInstance = null;
   }
 }
