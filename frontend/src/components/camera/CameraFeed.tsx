@@ -28,7 +28,13 @@ export function CameraFeed({ cameraOn, backendStatus, videoRef, canvasRef }: Cam
     <div className="relative overflow-hidden rounded-2xl border border-gray-200 shadow-sm">
       <video
         ref={videoRef}
-        style={{ display: "none" }}
+        style={{
+          position: "absolute",
+          width: "1px",
+          height: "1px",
+          opacity: 0,
+          pointerEvents: "none",
+        }}
         playsInline
         muted
       />

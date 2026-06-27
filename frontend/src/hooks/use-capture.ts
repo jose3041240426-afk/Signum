@@ -1,78 +1,121 @@
-﻿import { useState, useCallback } from "react";
+﻿import { useState, useCallback, useRef } from "react";
+import { db, type SignType } from "@/lib/db";
 import {
-  startLetterCapture as startLetterService,
-  startWordCapture as startWordService,
-  stopWordCapture as stopWordService,
-  startDynamicCapture as startDynamicService,
-  stopDynamicCapture as stopDynamicService,
-  deleteWord as deleteWordService,
-  deleteDynamic as deleteDynamicService,
-  getRegisteredLetters,
-  getRegisteredWords,
-  getRegisteredDynamic,
-} from "@/services/capture.service";
+  startCapture,
+  feedCaptureFrame,
+  cancelCapture,
+  type CaptureState,
+} from "@/services/capture-local.service";
 
 export function useCapture() {
-  const [letterToCapture, setLetterToCapture] = useState("B");
-  const [wordToCapture, setWordToCapture] = useState("Hola");
-  const [dynamicToCapture, setDynamicToCapture] = useState("Hola");
+  const [letterToCapture, setLetterToCapture] = useState("");
+  const [wordToCapture, setWordToCapture] = useState("");
+  const [captureState, setCaptureState] = useState<CaptureState>({
+    isRecording: false,
+    label: "",
+    samplesCount: 0,
+    requiredSamples: 0,
+    status: "idle",
+  });
   const [registeredLetters, setRegisteredLetters] = useState<string[]>([]);
   const [registeredWords, setRegisteredWords] = useState<string[]>([]);
-  const [registeredDynamic, setRegisteredDynamic] = useState<string[]>([]);
+  const captureActiveRef = useRef(false);
 
   const fetchRegisteredLetters = useCallback(async () => {
-    const letters = await getRegisteredLetters();
-    setRegisteredLetters(letters);
+    const labels = await db.getDistinctLabels("letter");
+    setRegisteredLetters(labels);
   }, []);
 
   const fetchRegisteredWords = useCallback(async () => {
-    const words = await getRegisteredWords();
-    setRegisteredWords(words);
+    const labels = await db.getDistinctLabels("word");
+    setRegisteredWords(labels);
   }, []);
 
-  const fetchRegisteredDynamic = useCallback(async () => {
-    const signs = await getRegisteredDynamic();
-    setRegisteredDynamic(signs);
+  const startLetterRecording = useCallback(
+    async (letter: string) => {
+      captureActiveRef.current = true;
+      const state = startCapture("letter", letter, (count) => {
+        setCaptureState((prev) => ({
+          ...prev,
+          samplesCount: count,
+        }));
+      }, () => {
+        setCaptureState({
+          isRecording: false,
+          label: "",
+          samplesCount: 0,
+          requiredSamples: 0,
+          status: "done",
+        });
+        captureActiveRef.current = false;
+        fetchRegisteredLetters();
+      });
+      setCaptureState(state);
+    },
+    [fetchRegisteredLetters],
+  );
+
+  const startWordRecording = useCallback(
+    async (word: string) => {
+      captureActiveRef.current = true;
+      const state = startCapture("word", word, (count) => {
+        setCaptureState((prev) => ({
+          ...prev,
+          samplesCount: count,
+        }));
+      }, () => {
+        setCaptureState({
+          isRecording: false,
+          label: "",
+          samplesCount: 0,
+          requiredSamples: 0,
+          status: "done",
+        });
+        captureActiveRef.current = false;
+        fetchRegisteredWords();
+      });
+      setCaptureState(state);
+    },
+    [fetchRegisteredWords],
+  );
+
+  const stopRecording = useCallback(async () => {
+    cancelCapture();
+    captureActiveRef.current = false;
+    setCaptureState({
+      isRecording: false,
+      label: "",
+      samplesCount: 0,
+      requiredSamples: 0,
+      status: "idle",
+    });
   }, []);
 
-  const startLetterRecording = useCallback(async (letter: string) => {
-    await startLetterService(letter);
-  }, []);
-
-  const startWordRecording = useCallback(async (word: string) => {
-    await startWordService(word);
-  }, []);
-
-  const startDynamicRecording = useCallback(async (signName: string) => {
-    return startDynamicService(signName);
-  }, []);
-
-  const stopWordRecording = useCallback(async () => {
-    return stopWordService();
-  }, []);
-
-  const stopDynamicRecording = useCallback(async () => {
-    return stopDynamicService();
-  }, []);
+  const removeLetter = useCallback(async (letter: string) => {
+    await db.deleteSamplesByLabel(letter);
+    fetchRegisteredLetters();
+  }, [fetchRegisteredLetters]);
 
   const removeWord = useCallback(async (word: string) => {
-    await deleteWordService(word);
-    setRegisteredWords((prev) => prev.filter((w) => w !== word));
-  }, []);
-
-  const removeDynamic = useCallback(async (signName: string) => {
-    await deleteDynamicService(signName);
-    setRegisteredDynamic((prev) => prev.filter((s) => s !== signName));
-  }, []);
+    await db.deleteSamplesByLabel(word);
+    fetchRegisteredWords();
+  }, [fetchRegisteredWords]);
 
   return {
-    letterToCapture, setLetterToCapture,
-    wordToCapture, setWordToCapture,
-    dynamicToCapture, setDynamicToCapture,
-    registeredLetters, registeredWords, registeredDynamic,
-    fetchRegisteredLetters, fetchRegisteredWords, fetchRegisteredDynamic,
-    startLetterRecording, startWordRecording, startDynamicRecording,
-    stopWordRecording, stopDynamicRecording,
-    removeWord, removeDynamic,
+    letterToCapture,
+    setLetterToCapture,
+    wordToCapture,
+    setWordToCapture,
+    captureState,
+    registeredLetters,
+    registeredWords,
+    fetchRegisteredLetters,
+    fetchRegisteredWords,
+    startLetterRecording,
+    startWordRecording,
+    stopRecording,
+    removeLetter,
+    removeWord,
+    captureActiveRef,
   };
 }

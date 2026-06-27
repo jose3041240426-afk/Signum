@@ -17,6 +17,8 @@ let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let shouldReconnect = false;
 let pendingLandmarks: number[] | null = null;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 3;
 
 export function connectWebSocket(
   onPrediction: OnPrediction,
@@ -24,6 +26,7 @@ export function connectWebSocket(
   mode: string = "letters",
 ): void {
   shouldReconnect = true;
+  reconnectAttempts = 0;
   const url = ENV.BACKEND_URL.replace(/^http/, "ws") + "/ws/predict";
 
   try {
@@ -48,11 +51,14 @@ export function connectWebSocket(
 
     ws.onclose = () => {
       onStatusChange(false);
-      if (shouldReconnect) {
+      if (shouldReconnect && reconnectAttempts < maxReconnectAttempts) {
+        reconnectAttempts++;
         reconnectTimer = setTimeout(
           () => connectWebSocket(onPrediction, onStatusChange, mode),
           2000,
         );
+      } else {
+        shouldReconnect = false;
       }
     };
 

@@ -1,62 +1,100 @@
-﻿import { useState } from "react";
-import { trainSignModel, trainWordModel, trainDynamicModel } from "@/services/model.service";
+import { useState } from "react";
+import { db, type SignType } from "@/lib/db";
+import { trainRandomForest } from "@/services/rf-trainer";
+import type { RFModel } from "@/services/rf-inference";
+
+async function trainForType(type: SignType): Promise<{
+  model: RFModel;
+  classes: string[];
+  total: number;
+}> {
+  const samples = await db.getSamplesByType(type);
+
+  if (samples.length === 0) {
+    throw new Error(`No hay muestras de tipo "${type}" para entrenar.`);
+  }
+
+  const labels = [...new Set(samples.map((s) => s.label))];
+  if (labels.length < 2) {
+    throw new Error(
+      `Se necesitan al menos 2 clases diferentes. Solo hay: ${labels.join(", ")}`,
+    );
+  }
+
+  const trainingData = samples.map((s) => ({
+    features: s.landmarks,
+    label: s.label,
+  }));
+
+  const model = trainRandomForest(trainingData, {
+    nTrees: 50,
+    maxDepth: 15,
+  });
+
+  await db.saveModel({
+    id: type === "letter" ? "rf-letter" : "rf-word",
+    type,
+    data: model,
+    classes: model.classes,
+  });
+
+  return { model, classes: model.classes, total: samples.length };
+}
 
 export function useModelTraining() {
   const [isTraining, setIsTraining] = useState(false);
   const [trainingMessage, setTrainingMessage] = useState("");
   const [isTrainingWords, setIsTrainingWords] = useState(false);
   const [trainingWordsMessage, setTrainingWordsMessage] = useState("");
-  const [isTrainingDynamic, setIsTrainingDynamic] = useState(false);
-  const [trainingDynamicMessage, setTrainingDynamicMessage] = useState("");
 
-  const trainLetters = async () => {
+  const trainLetters = async (): Promise<RFModel | null> => {
     setIsTraining(true);
-    setTrainingMessage("Recopilando archivos de datos y entrenando clasificador...");
+    setTrainingMessage("Entrenando clasificador de letras...");
     try {
-      const data = await trainSignModel();
-      setTrainingMessage(`Modelo entrenado con las senas: ${data.classes.join(", ")}`);
-      return true;
+      const { model, classes, total } = await trainForType("letter");
+      setTrainingMessage(
+        `Modelo entrenado con ${total} muestras. Clases: ${classes.join(", ")}`,
+      );
+      return model;
     } catch (e: any) {
-      setTrainingMessage(`Fallo: ${e.message}`);
-      return false;
+      if (e.message.includes("No hay muestras")) {
+        setTrainingMessage("");
+      } else {
+        setTrainingMessage(`Fallo en letras: ${e.message}`);
+      }
+      return null;
     } finally {
       setIsTraining(false);
     }
   };
 
-  const trainWords = async () => {
+  const trainWords = async (): Promise<RFModel | null> => {
     setIsTrainingWords(true);
-    setTrainingWordsMessage("Entrenando modelo de palabras...");
+    setTrainingWordsMessage("Entrenando clasificador de palabras...");
     try {
-      const data = await trainWordModel();
-      setTrainingWordsMessage(`Modelo de palabras entrenado: ${data.classes.join(", ")} (${data.total_sequences} secuencias)`);
-      return true;
+      const { model, classes, total } = await trainForType("word");
+      setTrainingWordsMessage(
+        `Modelo de palabras entrenado con ${total} muestras. Clases: ${classes.join(", ")}`,
+      );
+      return model;
     } catch (e: any) {
-      setTrainingWordsMessage(`Fallo: ${e.message}`);
-      return false;
+      if (e.message.includes("No hay muestras")) {
+        setTrainingWordsMessage("");
+      } else {
+        setTrainingWordsMessage(`Fallo en palabras: ${e.message}`);
+      }
+      return null;
     } finally {
       setIsTrainingWords(false);
     }
   };
 
-  const trainDynamic = async () => {
-    setIsTrainingDynamic(true);
-    setTrainingDynamicMessage("Entrenando modelo de senas con movimiento...");
-    try {
-      const data = await trainDynamicModel();
-      setTrainingDynamicMessage(`Modelo dinamico entrenado: ${data.classes.join(", ")} (${data.total_sequences} secuencias)`);
-      return true;
-    } catch (e: any) {
-      setTrainingDynamicMessage(`Fallo: ${e.message}`);
-      return false;
-    } finally {
-      setIsTrainingDynamic(false);
-    }
-  };
-
   return {
-    isTraining, trainingMessage, trainLetters,
-    isTrainingWords, trainingWordsMessage, trainWords,
-    isTrainingDynamic, trainingDynamicMessage, trainDynamic,
+    isTraining,
+    trainingMessage,
+    trainLetters,
+    isTrainingWords,
+    trainingWordsMessage,
+    trainWords,
   };
 }

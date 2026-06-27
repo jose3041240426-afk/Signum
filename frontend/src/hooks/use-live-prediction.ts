@@ -11,7 +11,9 @@ import {
   type MediaPipeDetectionResult,
 } from "@/services/mediapipe.service";
 import { RandomForestPredictor, type PredictionResult } from "@/services/rf-inference";
-import { useTTS } from "./use-tts";
+import { db } from "@/lib/db";
+import { feedCaptureFrame, isCapturing } from "@/services/capture-local.service";
+import type { RefObject } from "react";
 
 export interface LivePredictionData {
   letter: string;
@@ -41,19 +43,23 @@ const DEFAULT_PREDICTION: LivePredictionData = {
 
 const BUFFER_SIZE = 5;
 
-export function useLivePrediction(mode: string = "letters") {
+export function useLivePrediction(
+  mode: string = "letters",
+  captureActiveRef?: RefObject<boolean>,
+) {
   const [data, setData] = useState<LivePredictionData>(DEFAULT_PREDICTION);
   const [cameraOn, setCameraOn] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const modeRef = useRef(mode);
-  const { speak, resetLastSpoken } = useTTS();
   const lastPredictionRef = useRef("");
   const rfLetter = useRef<RandomForestPredictor>(new RandomForestPredictor());
   const rfWord = useRef<RandomForestPredictor>(new RandomForestPredictor());
   const localReadyRef = useRef(false);
   const predictionBuffer = useRef<PredictionResult[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  const lastValidLandmarks = useRef<number[]>([]);
+  const noDetectionFrames = useRef(0);
 
   modeRef.current = mode;
 
@@ -62,34 +68,68 @@ export function useLivePrediction(mode: string = "letters") {
     predictionBuffer.current = [];
   }, [mode]);
 
-  // Load local models
+  async function loadLocalModels(): Promise<boolean> {
+    let letterReady = false;
+    let wordReady = false;
+
+    try {
+      const letterModel = await db.getModel("rf-letter");
+      if (letterModel?.data) {
+        rfLetter.current["model"] = letterModel.data as any;
+        letterReady = true;
+      }
+    } catch {}
+
+    try {
+      const wordModel = await db.getModel("rf-word");
+      if (wordModel?.data) {
+        rfWord.current["model"] = wordModel.data as any;
+        wordReady = true;
+      }
+    } catch {}
+
+    if (!letterReady) {
+      try {
+        await rfLetter.current.load("/models/modelo_letras.json");
+        letterReady = true;
+      } catch {}
+    }
+
+    if (!wordReady) {
+      try {
+        await rfWord.current.load("/models/modelo_palabras.json");
+        wordReady = true;
+      } catch {}
+    }
+
+    return letterReady || wordReady;
+  }
+
   useEffect(() => {
     let alive = true;
     console.log("[Signum] Cargando modelos locales...");
-    Promise.all([
-      rfLetter.current.load("/models/modelo_letras.json"),
-      rfWord.current.load("/models/modelo_palabras.json"),
-    ])
-      .then(() => {
-        if (alive) {
-          localReadyRef.current = true;
-          setData((prev) => ({ ...prev, localModelReady: true }));
-          console.log("[Signum] Modelos locales cargados exitosamente");
-        }
-      })
-      .catch((err) => {
-        console.error("[Signum] Error al cargar modelos locales:", err);
-        if (alive) {
-          localReadyRef.current = false;
-        }
-      });
-    return () => { alive = false; };
+    loadLocalModels().then((ready) => {
+      if (alive) {
+        localReadyRef.current = ready;
+        setData((prev) => ({ ...prev, localModelReady: ready }));
+        console.log(
+          ready
+            ? "[Signum] Modelos locales cargados exitosamente"
+            : "[Signum] No se pudieron cargar modelos locales",
+        );
+      }
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const smoothPredict = (label: string, confidence: number): PredictionResult => {
+  const smoothPredict = (label: string, confidence: number): PredictionResult | null => {
     const buf = predictionBuffer.current;
     buf.push({ label, confidence });
     if (buf.length > BUFFER_SIZE) buf.shift();
+
+    if (buf.length < 2) return null;
 
     const counts: Record<string, { count: number; totalConf: number }> = {};
     for (const p of buf) {
@@ -99,51 +139,71 @@ export function useLivePrediction(mode: string = "letters") {
     }
     let best = label;
     let bestCount = 0;
-    for (const [lbl, c] of Object.entries(counts)) {
+    for (const [key, c] of Object.entries(counts)) {
       if (c.count > bestCount) {
-        best = lbl;
+        best = key;
         bestCount = c.count;
       }
     }
-    return { label: best, confidence: Math.round(counts[best].totalConf / counts[best].count * 10) / 10 };
+    return {
+      label: best,
+      confidence:
+        Math.round((counts[best].totalConf / counts[best].count) * 10) / 10,
+    };
   };
 
   const handleMediaPipeResult = useCallback(
     (result: MediaPipeDetectionResult) => {
-      if (!result.handDetected || result.landmarks.length !== 63) return;
+      let landmarksToUse = result.landmarks;
+
+      if (!result.handDetected || result.landmarks.length !== 63) {
+        noDetectionFrames.current += 1;
+        if (noDetectionFrames.current <= 3 && lastValidLandmarks.current.length === 63) {
+          landmarksToUse = lastValidLandmarks.current;
+        } else {
+          setData((prev) => ({ ...prev, handDetected: false }));
+          return;
+        }
+      } else {
+        noDetectionFrames.current = 0;
+        lastValidLandmarks.current = result.landmarks;
+      }
+
+      if (captureActiveRef?.current || isCapturing()) {
+        feedCaptureFrame(landmarksToUse);
+      }
 
       if (localReadyRef.current) {
-        const predictor = modeRef.current === "words" ? rfWord.current : rfLetter.current;
-        const pred = predictor.predict(result.landmarks);
+        const predictor =
+          modeRef.current === "words"
+            ? rfWord.current
+            : rfLetter.current;
+        const pred = predictor.predict(landmarksToUse);
         if (pred) {
           const smoothed = smoothPredict(pred.label, pred.confidence);
-          const isLetterMode = modeRef.current === "letters";
-          const isWordMode = modeRef.current === "words";
+          if (smoothed) {
+            const isLetterMode = modeRef.current === "letters";
+            const isWordMode = modeRef.current === "words";
 
-          setData((prev) => ({
-            ...prev,
-            letter: isLetterMode ? smoothed.label : prev.letter,
-            confidence: isLetterMode ? smoothed.confidence : prev.confidence,
-            word: isWordMode ? smoothed.label : prev.word,
-            wordConfidence: isWordMode ? smoothed.confidence : prev.wordConfidence,
-          }));
-
-          if (smoothed.label !== lastPredictionRef.current) {
-            lastPredictionRef.current = smoothed.label;
-            if (isLetterMode && smoothed.confidence > 55) speak(smoothed.label);
-            if (isWordMode && smoothed.confidence > 30) speak(smoothed.label);
+            setData((prev) => ({
+              ...prev,
+              letter: isLetterMode ? smoothed.label : prev.letter,
+              confidence: isLetterMode ? smoothed.confidence : prev.confidence,
+              word: isWordMode ? smoothed.label : prev.word,
+              wordConfidence: isWordMode ? smoothed.confidence : prev.wordConfidence,
+              handDetected: true,
+            }));
           }
         }
       }
 
-      sendLandmarks(result.landmarks, modeRef.current);
+      sendLandmarks(landmarksToUse, modeRef.current);
     },
-    [speak],
+    [captureActiveRef],
   );
 
   const handleWSPrediction = useCallback(
     (result: WSPredictionResult) => {
-      // Only use WS predictions if local models aren't ready
       if (localReadyRef.current) return;
 
       setData((prev) => ({
@@ -156,21 +216,8 @@ export function useLivePrediction(mode: string = "letters") {
         dynamicSign: result.dynamic_sign || prev.dynamicSign,
         dynamicConfidence: result.dynamic_confidence || prev.dynamicConfidence,
       }));
-
-      if (modeRef.current === "letters" && result.letter && result.confidence > 55) {
-        if (result.letter !== lastPredictionRef.current) {
-          lastPredictionRef.current = result.letter;
-          speak(result.letter);
-        }
-      }
-      if (modeRef.current === "words" && result.word && result.word_confidence > 30) {
-        if (result.word !== lastPredictionRef.current) {
-          lastPredictionRef.current = result.word;
-          speak(result.word);
-        }
-      }
     },
-    [speak],
+    [],
   );
 
   const handleWSStatus = useCallback((connected: boolean) => {
@@ -179,7 +226,9 @@ export function useLivePrediction(mode: string = "letters") {
 
   useEffect(() => {
     connectWebSocket(handleWSPrediction, handleWSStatus, mode);
-    return () => { disconnectWebSocket(); };
+    return () => {
+      disconnectWebSocket();
+    };
   }, [handleWSPrediction, handleWSStatus, mode]);
 
   useEffect(() => {
@@ -190,48 +239,59 @@ export function useLivePrediction(mode: string = "letters") {
 
     let mounted = true;
 
-    initMediaPipe(videoRef.current, canvasRef.current, (result) => {
-      if (mounted) {
-        handleMediaPipeResult(result);
-        setData((prev) => ({
-          ...prev,
-          handDetected: result.handDetected,
-          mediapipeReady: true,
-        }));
-      }
-    }, streamRef.current).catch(() => {
+    initMediaPipe(
+      videoRef.current,
+      canvasRef.current,
+      (result) => {
+        if (mounted) {
+          handleMediaPipeResult(result);
+          setData((prev) => ({
+            ...prev,
+            handDetected: result.handDetected,
+            mediapipeReady: true,
+          }));
+        }
+      },
+      streamRef.current,
+    ).catch(() => {
       if (mounted) setData((prev) => ({ ...prev, mediapipeReady: false }));
     });
 
     return () => {
       mounted = false;
       stopMediaPipe();
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
     };
   }, [cameraOn, handleMediaPipeResult]);
 
   const toggleCamera = useCallback(async () => {
     if (cameraOn) {
-      // Turning off
       setCameraOn(false);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
-      resetLastSpoken();
     } else {
-      // Turning on — request camera with user gesture
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: "user" },
+          video: { width: 800, height: 600, facingMode: "user" },
         });
         streamRef.current = stream;
         setCameraOn(true);
-        resetLastSpoken();
       } catch {
         console.error("[Signum] Permiso de camara denegado");
       }
     }
-  }, [cameraOn, resetLastSpoken]);
+  }, [cameraOn]);
+
+  const reloadModels = useCallback(async () => {
+    const ready = await loadLocalModels();
+    localReadyRef.current = ready;
+    setData((prev) => ({ ...prev, localModelReady: ready }));
+  }, []);
 
   return {
     data,
@@ -239,5 +299,6 @@ export function useLivePrediction(mode: string = "letters") {
     toggleCamera,
     videoRef,
     canvasRef,
+    reloadModels,
   };
 }

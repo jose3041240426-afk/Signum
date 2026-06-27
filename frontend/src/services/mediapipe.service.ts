@@ -7,8 +7,10 @@ export interface MediaPipeDetectionResult {
 type OnResult = (result: MediaPipeDetectionResult) => void;
 
 let holisticInstance: any = null;
-let cameraInstance: any = null;
 let isRunning = false;
+
+const MEDIAPIPE_VERSION = "0.5.1675471629";
+const FRAME_INTERVAL_MS = 50;
 
 export async function initMediaPipe(
   videoElement: HTMLVideoElement,
@@ -16,46 +18,65 @@ export async function initMediaPipe(
   onResult: OnResult,
   existingStream?: MediaStream | null,
 ): Promise<void> {
-  if (isRunning) return;
+  if (isRunning) {
+    await stopMediaPipe();
+  }
 
   const holisticPkg = await import("@mediapipe/holistic");
+  const HolisticConstructor =
+    holisticPkg.Holistic ||
+    (holisticPkg as any).default?.Holistic ||
+    (holisticPkg as any).default;
+  const handConnections =
+    holisticPkg.HAND_CONNECTIONS ||
+    (holisticPkg as any).default?.HAND_CONNECTIONS;
 
-  holisticInstance = new holisticPkg.Holistic({
+  holisticInstance = new HolisticConstructor({
     locateFile: (file: string) =>
-      `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`,
+      `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@${MEDIAPIPE_VERSION}/${file}`,
   });
 
   holisticInstance.setOptions({
     modelComplexity: 1,
     smoothLandmarks: true,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.6,
+    selfieMode: true,
   });
 
   const drawingPkg = await import("@mediapipe/drawing_utils");
+  const drawConnections =
+    drawingPkg.drawConnectors ||
+    (drawingPkg as any).default?.drawConnectors ||
+    (drawingPkg as any).default;
+  const drawLandmarkPoints =
+    drawingPkg.drawLandmarks ||
+    (drawingPkg as any).default?.drawLandmarks ||
+    (drawingPkg as any).default;
 
   holisticInstance.onResults((results: any) => {
-    const ctx = canvasElement.getContext("2d")!;
-    canvasElement.width = videoElement.videoWidth || 640;
-    canvasElement.height = videoElement.videoHeight || 480;
+    const ctx = canvasElement.getContext("2d");
+    if (!ctx) return;
+    const w = videoElement.videoWidth || 800;
+    const h = videoElement.videoHeight || 600;
+    if (canvasElement.width !== w) canvasElement.width = w;
+    if (canvasElement.height !== h) canvasElement.height = h;
     ctx.save();
     ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
     ctx.translate(canvasElement.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-    // Holistic uses leftHandLandmarks / rightHandLandmarks (NOT multiHandLandmarks)
     const detectedHands: any[] = [];
     if (results.rightHandLandmarks) detectedHands.push(results.rightHandLandmarks);
     if (results.leftHandLandmarks) detectedHands.push(results.leftHandLandmarks);
 
-    if (detectedHands.length > 0) {
-      const drawConnections = drawingPkg.drawConnectors;
-      const drawLandmarkPoints = drawingPkg.drawLandmarks;
+    let result: MediaPipeDetectionResult;
 
+    if (detectedHands.length > 0) {
       for (const handLandmarks of detectedHands) {
-        if (drawConnections && holisticPkg?.HAND_CONNECTIONS) {
-          drawConnections(ctx, handLandmarks, holisticPkg.HAND_CONNECTIONS, {
+        if (drawConnections && handConnections) {
+          drawConnections(ctx, handLandmarks, handConnections, {
             color: "#FFFFFF",
             lineWidth: 2,
           });
@@ -91,65 +112,59 @@ export async function initMediaPipe(
         normalized.push(x / maxDist, y / maxDist, z / maxDist);
       }
 
-      onResult({
+      result = {
         handDetected: true,
         landmarks: normalized,
         canvas: canvasElement,
-      });
+      };
     } else {
-      onResult({
+      result = {
         handDetected: false,
         landmarks: [],
         canvas: canvasElement,
-      });
+      };
     }
+
     ctx.restore();
+    if (isRunning) onResult(result);
   });
 
-  try {
-    const camUtilsPkg = await import("@mediapipe/camera_utils");
-    const CameraClass = camUtilsPkg.Camera;
-    cameraInstance = new CameraClass(videoElement, {
-      onFrame: async () => {
-        if (holisticInstance) {
-          await holisticInstance.send({ image: videoElement });
-        }
-      },
-      width: 640,
-      height: 480,
+  if (existingStream) {
+    videoElement.srcObject = existingStream;
+  } else {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 800, height: 600, facingMode: "user" },
     });
-    await cameraInstance.start();
-  } catch {
-    if (existingStream) {
-      videoElement.srcObject = existingStream;
-    } else {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: "user" },
-      });
-      videoElement.srcObject = stream;
-    }
-    await videoElement.play();
-    const loop = async () => {
-      if (!isRunning) return;
-      if (holisticInstance && videoElement.readyState >= 2) {
-        await holisticInstance.send({ image: videoElement });
-      }
-      requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
+    videoElement.srcObject = stream;
   }
 
+  await videoElement.play();
   isRunning = true;
+
+  let lastSendTime = 0;
+  const loop = async (timestamp: number) => {
+    if (!isRunning) return;
+    if (timestamp - lastSendTime >= FRAME_INTERVAL_MS) {
+      if (holisticInstance && videoElement.readyState >= 2) {
+        lastSendTime = timestamp;
+        try {
+          await holisticInstance.send({ image: videoElement });
+        } catch (err) {
+          console.error("[Signum] Error sending frame to holisticInstance:", err);
+        }
+      }
+    }
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
 }
 
 export async function stopMediaPipe(): Promise<void> {
   isRunning = false;
-  if (cameraInstance) {
-    try { cameraInstance.stop(); } catch { }
-    cameraInstance = null;
-  }
   if (holisticInstance) {
-    try { holisticInstance.close(); } catch { }
+    try {
+      holisticInstance.close();
+    } catch {}
     holisticInstance = null;
   }
 }

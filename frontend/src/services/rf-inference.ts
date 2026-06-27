@@ -1,4 +1,4 @@
-interface RFNode {
+export interface RFNode {
   f: number;
   t: number;
   l: number;
@@ -6,11 +6,11 @@ interface RFNode {
   v?: number[][];
 }
 
-interface RFTree {
+export interface RFTree {
   n: RFNode[];
 }
 
-interface RFModel {
+export interface RFModel {
   nTrees: number;
   nFeatures: number;
   classes: string[];
@@ -23,7 +23,7 @@ interface PredictionResult {
 }
 
 class RandomForestPredictor {
-  private model: RFModel | null = null;
+  model: RFModel | null = null;
 
   async load(url: string): Promise<void> {
     const res = await fetch(url);
@@ -32,6 +32,10 @@ class RandomForestPredictor {
 
   isLoaded(): boolean {
     return this.model !== null;
+  }
+
+  loadFromModel(m: RFModel): void {
+    this.model = m;
   }
 
   predict(features: number[]): PredictionResult | null {
@@ -45,12 +49,18 @@ class RandomForestPredictor {
         idx = features[nodes[idx].f] <= nodes[idx].t ? nodes[idx].l : nodes[idx].r;
       }
       const probs = nodes[idx].v![0];
-      const maxIdx = probs.indexOf(Math.max(...probs));
+      let maxP = probs[0];
+      let maxIdx = 0;
+      for (let i = 1; i < probs.length; i++) {
+        if (probs[i] > maxP) {
+          maxP = probs[i];
+          maxIdx = i;
+        }
+      }
       const label = this.model.classes[maxIdx];
       votes[label] = (votes[label] || 0) + 1;
     }
 
-    // Find winner and confidence
     let best = "";
     let bestCount = 0;
     for (const [label, count] of Object.entries(votes)) {
@@ -68,4 +78,4 @@ class RandomForestPredictor {
 }
 
 export { RandomForestPredictor };
-export type { RFModel, PredictionResult };
+export type { PredictionResult };

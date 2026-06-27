@@ -6,8 +6,12 @@ export function useTTS() {
   const lastSpokenRef = useRef("");
 
   const speak = useCallback(async (text: string) => {
-    if (speakingRef.current) return;
-    if (!text || text === lastSpokenRef.current) return;
+    if (!text) return;
+    resetLastSpoken();
+    if (speakingRef.current) {
+      window.speechSynthesis?.cancel();
+      speakingRef.current = false;
+    }
     speakingRef.current = true;
     lastSpokenRef.current = text;
     try {
@@ -15,21 +19,23 @@ export function useTTS() {
         await speakNative(text);
       }
     } catch {
-      /* silent */
     } finally {
       speakingRef.current = false;
     }
   }, []);
 
   const speakPhrase = useCallback(async (text: string) => {
-    if (speakingRef.current) return;
+    if (!text) return;
+    if (speakingRef.current) {
+      window.speechSynthesis?.cancel();
+      speakingRef.current = false;
+    }
     speakingRef.current = true;
     try {
       if (isNativeTTSAvailable()) {
         await speakNative(text);
       }
     } catch {
-      /* silent */
     } finally {
       speakingRef.current = false;
     }
