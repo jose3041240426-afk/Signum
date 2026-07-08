@@ -13,8 +13,9 @@ C. Detección de Manos vs. Frase (El problema de los "Espacios")
 Para armar palabras o frases, el usuario tiene que deletrear. ¿Cómo sabes cuándo termina una letra y empieza otra?
 
 Recomendación: Puedes usar un umbral de movimiento. Si calculas la varianza de los landmarks en los últimos 10 frames y es muy baja (la mano está quieta), guardas la letra. Si la varianza sube (la mano se mueve a la siguiente seña), insertas un "espacio".
+
 2. El Gran Reto: Latencia en la Web (Frontend vs Backend)
-En tus instrucciones mencionas que el frontend es Next.js y el backend FastAPI. En tu código actual, el modelo predice muy rápido, pero enviar 30 frames por segundo desde el navegador al backend mediante HTTP genera una latencia inaceptable.
+En tus instrucciones mencionas que el frontend es Next.js y el backend FastAPI. En tu código actual, el modelo predice muy rápido, pe3ro enviar 30 frames por segundo desde el navegador al backend mediante HTTP genera una latencia inaceptable.
 
 El problema: Si Next.js captura el video, envía la imagen por red a FastAPI, FastAPI la procesa con OpenCV/MediaPipe, predice y devuelve el texto... habrá un retraso de 1 o 2 segundos. La cámara se verá "atrasada".
 La solución (Arquitectura Web Real-Time):

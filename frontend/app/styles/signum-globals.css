@@ -1,1 +1,125 @@
-/* Empty file as we are moving to new inline styles and layout */
+/* Custom styling for the glass radio mode selector */
+
+.glass-radio-group {
+  --bg: rgba(255, 255, 255, 0.4);
+  
+  display: flex;
+  position: relative;
+  background: var(--bg);
+  border-radius: 1rem;
+  backdrop-filter: blur(12px);
+  box-shadow:
+    inset 1px 1px 4px rgba(255, 255, 255, 0.4),
+    inset -1px -1px 6px rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  width: 100%;
+}
+
+.glass-radio-group input {
+  display: none;
+}
+
+.glass-radio-group label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 80px;
+  font-size: 14px;
+  padding: 0.8rem 1rem;
+  cursor: pointer;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: #475569;
+  position: relative;
+  z-index: 2;
+  transition: color 0.3s ease-in-out;
+}
+
+.glass-radio-group label:hover {
+  color: #0f172a;
+}
+
+.glass-radio-group input:checked + label {
+  color: #ffffff;
+}
+
+.glass-glider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: calc(100% / 3);
+  border-radius: 1rem;
+  z-index: 1;
+  transition:
+    transform 0.5s cubic-bezier(0.37, 1.95, 0.66, 0.56),
+    background 0.4s ease-in-out,
+    box-shadow 0.4s ease-in-out;
+}
+
+/* Deletrear */
+#mode-letters:checked ~ .glass-glider {
+  transform: translateX(0%);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.8), rgba(37, 99, 235, 1));
+  box-shadow:
+    0 0 18px rgba(59, 130, 246, 0.5),
+    0 0 10px rgba(96, 165, 250, 0.4) inset;
+}
+
+/* Palabras */
+#mode-words:checked ~ .glass-glider {
+  transform: translateX(100%);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.8), rgba(29, 78, 216, 1));
+  box-shadow:
+    0 0 18px rgba(37, 99, 235, 0.5),
+    0 0 10px rgba(59, 130, 246, 0.4) inset;
+}
+
+/* Movimiento */
+#mode-dynamic:checked ~ .glass-glider {
+  transform: translateX(200%);
+  background: linear-gradient(135deg, rgba(29, 78, 216, 0.8), rgba(30, 64, 175, 1));
+  box-shadow:
+    0 0 18px rgba(29, 78, 216, 0.5),
+    0 0 10px rgba(37, 99, 235, 0.4) inset;
+}
+
+/* Auto */
+#mode-auto:checked ~ .glass-glider {
+  transform: translateX(300%);
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.85), rgba(91, 33, 182, 1));
+  box-shadow:
+    0 0 18px rgba(124, 58, 237, 0.55),
+    0 0 10px rgba(167, 139, 250, 0.4) inset;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes slideUpFade {
+  0% {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-step-1 {
+  animation: slideUpFade 0.4s ease-out forwards;
+}
+
+.animate-step-2 {
+  opacity: 0;
+  animation: slideUpFade 0.4s ease-out 0.1s forwards;
+}
+
+.animate-step-3 {
+  opacity: 0;
+  animation: slideUpFade 0.4s ease-out 0.2s forwards;
+}

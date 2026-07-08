@@ -18,6 +18,8 @@ export const metadata: Metadata = {
   description: "Reconocimiento de lenguaje de señas mexicano en tiempo real",
 };
 
+import { FluidBackground } from "@/components/layout/FluidBackground";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -25,7 +27,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es" className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-      <body className="min-h-screen bg-white text-gray-900">{children}</body>
+      <body className="min-h-screen bg-transparent text-gray-900">
+        <FluidBackground />
+        {children}
+      </body>
     </html>
   );
 }

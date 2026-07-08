@@ -31,8 +31,12 @@ async function trainForType(type: SignType): Promise<{
     maxDepth: 15,
   });
 
+  let modelId = "rf-letter";
+  if (type === "word") modelId = "rf-word";
+  if (type === "dynamic") modelId = "rf-dynamic";
+
   await db.saveModel({
-    id: type === "letter" ? "rf-letter" : "rf-word",
+    id: modelId,
     type,
     data: model,
     classes: model.classes,
@@ -46,6 +50,8 @@ export function useModelTraining() {
   const [trainingMessage, setTrainingMessage] = useState("");
   const [isTrainingWords, setIsTrainingWords] = useState(false);
   const [trainingWordsMessage, setTrainingWordsMessage] = useState("");
+  const [isTrainingDynamic, setIsTrainingDynamic] = useState(false);
+  const [trainingDynamicMessage, setTrainingDynamicMessage] = useState("");
 
   const trainLetters = async (): Promise<RFModel | null> => {
     setIsTraining(true);
@@ -89,6 +95,27 @@ export function useModelTraining() {
     }
   };
 
+  const trainDynamic = async (): Promise<RFModel | null> => {
+    setIsTrainingDynamic(true);
+    setTrainingDynamicMessage("Entrenando clasificador de señas dinámicas...");
+    try {
+      const { model, classes, total } = await trainForType("dynamic");
+      setTrainingDynamicMessage(
+        `Modelo dinámico entrenado con ${total} muestras. Clases: ${classes.join(", ")}`,
+      );
+      return model;
+    } catch (e: any) {
+      if (e.message.includes("No hay muestras")) {
+        setTrainingDynamicMessage("");
+      } else {
+        setTrainingDynamicMessage(`Fallo en dinámicas: ${e.message}`);
+      }
+      return null;
+    } finally {
+      setIsTrainingDynamic(false);
+    }
+  };
+
   return {
     isTraining,
     trainingMessage,
@@ -96,5 +123,8 @@ export function useModelTraining() {
     isTrainingWords,
     trainingWordsMessage,
     trainWords,
+    isTrainingDynamic,
+    trainingDynamicMessage,
+    trainDynamic,
   };
 }
