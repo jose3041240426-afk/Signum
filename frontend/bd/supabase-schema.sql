@@ -3,6 +3,18 @@
 -- Ejecutar en Supabase SQL Editor
 -- =============================================
 
+-- =============================================
+-- ATENCIÓN: Estos comandos borrarán las tablas existentes y todos sus datos.
+-- =============================================
+DROP TABLE IF EXISTS public.avances CASCADE;
+DROP TABLE IF EXISTS public.traducciones CASCADE;
+DROP TABLE IF EXISTS public.login CASCADE;
+DROP TABLE IF EXISTS public.usuario_roles CASCADE;
+DROP TABLE IF EXISTS public.usuarios CASCADE;
+DROP TABLE IF EXISTS public.roles CASCADE;
+DROP TABLE IF EXISTS public.catalogo_tipo_traduccion CASCADE;
+DROP TABLE IF EXISTS public.catalogo_generos CASCADE;
+
 -- 1. Tablas de catálogo
 -- -----------------------------------------
 
@@ -24,6 +36,8 @@ CREATE TABLE public.roles (
 -- 2. Tabla de usuarios (vinculada a auth.users)
 -- -----------------------------------------
 -- id_usuario = UUID de auth.users (Supabase Auth)
+-- NOTA: Se ha omitido el campo "contrasena" ya que en Supabase las contraseñas 
+-- se gestionan internamente en la tabla auth.users para mayor seguridad.
 
 CREATE TABLE public.usuarios (
   id_usuario uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -33,11 +47,20 @@ CREATE TABLE public.usuarios (
   correo varchar(100) NOT NULL UNIQUE,
   estado boolean DEFAULT true,
   fecha_registro date DEFAULT CURRENT_DATE,
-  id_genero integer NOT NULL REFERENCES public.catalogo_generos(id_genero),
-  id_rol integer NOT NULL REFERENCES public.roles(id_rol)
+  id_genero integer NOT NULL REFERENCES public.catalogo_generos(id_genero)
 );
 
--- 3. Tablas de actividad
+-- 3. Tabla intermedia para Usuarios y Roles
+-- -----------------------------------------
+
+CREATE TABLE public.usuario_roles (
+  id_usuario_rol serial PRIMARY KEY,
+  id_usuario uuid NOT NULL REFERENCES public.usuarios(id_usuario) ON DELETE CASCADE,
+  id_rol integer NOT NULL REFERENCES public.roles(id_rol) ON DELETE CASCADE,
+  fecha_asignacion date DEFAULT CURRENT_DATE
+);
+
+-- 4. Tablas de actividad
 -- -----------------------------------------
 
 CREATE TABLE public.login (
@@ -69,39 +92,54 @@ CREATE TABLE public.avances (
 -- =============================================
 
 INSERT INTO public.catalogo_generos (genero) VALUES
-  ('Masculino'),
-  ('Femenino'),
+  ('Hombre'),
+  ('Mujer'),
   ('Otro');
 
 INSERT INTO public.roles (nombre_rol) VALUES
-  ('Usuario'),
-  ('Administrador');
+  ('Administrador'),
+  ('Usuario');
 
 INSERT INTO public.catalogo_tipo_traduccion (tipo) VALUES
-  ('LSM a Texto'),
-  ('Texto a LSM');
+  ('LSM-TEXTO'),
+  ('TEXTO-VOZ'),
+  ('VOZ-TEXTO');
 
 -- =============================================
--- TRIGGER: crear perfil automáticamente al registrarse
+-- TRIGGER: crear perfil y rol automáticamente al registrarse
 -- =============================================
 
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
-SECURITY DEFINER SET search_path = ''
+SECURITY DEFINER SET search_path = 'public'
 AS $$
+DECLARE
+  default_role_id int;
 BEGIN
-  INSERT INTO public.usuarios (id_usuario, nombre, apellido_paterno, apellido_materno, correo, id_genero, id_rol)
+  -- Insertar perfil del usuario
+  INSERT INTO public.usuarios (id_usuario, nombre, apellido_paterno, apellido_materno, correo, id_genero)
   VALUES (
     NEW.id,
     COALESCE(NEW.raw_user_meta_data ->> 'nombre', ''),
     COALESCE(NEW.raw_user_meta_data ->> 'apellido_paterno', ''),
     COALESCE(NEW.raw_user_meta_data ->> 'apellido_materno', ''),
     NEW.email,
-    COALESCE((NEW.raw_user_meta_data ->> 'id_genero')::int, 1),
-    COALESCE((NEW.raw_user_meta_data ->> 'id_rol')::int, 1)
+    COALESCE((NEW.raw_user_meta_data ->> 'id_genero')::int, 1)
   );
+
+  -- Asignar rol por defecto (Usuario = id 2)
+  default_role_id := COALESCE((NEW.raw_user_meta_data ->> 'id_rol')::int, 2);
+
+  INSERT INTO public.usuario_roles (id_usuario, id_rol)
+  VALUES (NEW.id, default_role_id);
+
   RETURN NEW;
+EXCEPTION
+  WHEN others THEN
+    -- Si el perfil falla, el login de Supabase NO se bloquea
+    RAISE WARNING 'handle_new_user: error al crear perfil para %, SQLSTATE: %, SQLERRM: %', NEW.id, SQLSTATE, SQLERRM;
+    RETURN NEW;
 END;
 $$;
 
@@ -115,6 +153,7 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
 -- =============================================
 
 ALTER TABLE public.usuarios ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.usuario_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.login ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.traducciones ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.avances ENABLE ROW LEVEL SECURITY;
@@ -144,6 +183,11 @@ CREATE POLICY "Usuarios pueden actualizar su propio perfil"
   ON public.usuarios FOR UPDATE
   USING (auth.uid() = id_usuario);
 
+-- Usuario Roles: solo pueden ver sus propios roles
+CREATE POLICY "Usuarios pueden ver sus propios roles"
+  ON public.usuario_roles FOR SELECT
+  USING (auth.uid() = id_usuario);
+
 -- Login: solo pueden insertar y leer sus propios registros
 CREATE POLICY "Usuarios pueden insertar sus propios logins"
   ON public.login FOR INSERT
@@ -169,6 +213,10 @@ CREATE POLICY "Usuarios pueden insertar sus propios avances"
 
 CREATE POLICY "Usuarios pueden ver sus propios avances"
   ON public.avances FOR SELECT
+  USING (auth.uid() = id_usuario);
+
+CREATE POLICY "Usuarios pueden actualizar sus propios avances"
+  ON public.avances FOR UPDATE
   USING (auth.uid() = id_usuario);
 
 -- =============================================

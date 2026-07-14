@@ -8,17 +8,24 @@ import { useTTS } from "@/hooks/use-tts";
 import { usePhraseBuilder } from "@/hooks/use-phrase-builder";
 import { isNativeTTSAvailable } from "@/services/tts.service";
 import type { RFModel } from "@/services/rf-inference";
-import { MenuDrawer } from "@/components/ui/MenuDrawer";
-import { FlipButton } from "@/components/ui/FlipButton";
-import { NavButton } from "@/components/ui/NavButton";
 import { LiquidGlass } from "@/components/ui/LiquidGlass";
-import { signOut } from "@/services/auth.service";
-import { useRouter } from "next/navigation";
+import { getCurrentUser, recordTranslation } from "@/services/auth.service";
 
 export default function Home() {
-  const router = useRouter();
-  const [isMirrored, setIsMirrored] = useState(true);
+  const [isMirrored, setIsMirrored] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("isCameraMirrored");
+      return saved !== "false";
+    }
+    return true;
+  });
   const [predictionMode, setPredictionMode] = useState("letters");
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  useEffect(() => {
+    getCurrentUser().then(setCurrentUser).catch(console.error);
+  }, []);
+
   const {
     letterToCapture,
     setLetterToCapture,
@@ -74,6 +81,8 @@ export default function Home() {
     setPhrase,
     autoAddActive,
     setAutoAddActive,
+    preventRepeat,
+    setPreventRepeat,
     addLetter,
     addSpace,
     backspace,
@@ -85,7 +94,6 @@ export default function Home() {
 
   const [statusMessage, setStatusMessage] = useState("Cargando...");
   const [ttsAvailable, setTtsAvailable] = useState(false);
-  const autoAddFrameRef = useRef(0);
   const prevCaptureDoneRef = useRef(false);
   const lastSpokenPredictionRef = useRef("");
   const [soundOnSeña, setSoundOnSeña] = useState(false);
@@ -99,11 +107,6 @@ export default function Home() {
     prediction: string;
     confidence: number;
   } | null>(null);
-
-  const handleSignOut = useCallback(async () => {
-    await signOut();
-    router.push("/");
-  }, [router]);
 
   useEffect(() => {
     setTtsAvailable(isNativeTTSAvailable());
@@ -218,9 +221,8 @@ export default function Home() {
   ]);
 
   useEffect(() => {
-    if (!liveData.handDetected) return;
+    if (!liveData.handDetected || !autoAddActive) return;
 
-    // Find best prediction among all three models
     let currentPrediction = "";
     let currentConfidence = 0;
     let isWord = false;
@@ -229,23 +231,19 @@ export default function Home() {
       currentPrediction = liveData.letter;
       currentConfidence = liveData.confidence;
     }
-    if (liveData.word && liveData.wordConfidence >= 30 && liveData.wordConfidence > currentConfidence) {
+    if (liveData.word && liveData.wordConfidence >= 80 && liveData.wordConfidence > currentConfidence) {
       currentPrediction = liveData.word;
       currentConfidence = liveData.wordConfidence;
       isWord = true;
     }
-    if (liveData.dynamicSign && liveData.dynamicConfidence >= 30 && liveData.dynamicConfidence > currentConfidence) {
+    if (liveData.dynamicSign && liveData.dynamicConfidence >= 80 && liveData.dynamicConfidence > currentConfidence) {
       currentPrediction = liveData.dynamicSign;
       currentConfidence = liveData.dynamicConfidence;
       isWord = true;
     }
 
-    if (autoAddActive && currentPrediction) {
-      autoAddFrameRef.current += 1;
-      if (autoAddFrameRef.current > 6) {
-        addLetter(currentPrediction + (isWord ? " " : ""));
-        autoAddFrameRef.current = 0;
-      }
+    if (currentPrediction) {
+      tryAutoAdd(currentPrediction + (isWord ? " " : ""), currentConfidence);
     }
   }, [
     liveData.letter,
@@ -255,9 +253,8 @@ export default function Home() {
     liveData.confidence,
     liveData.wordConfidence,
     liveData.dynamicConfidence,
-    predictionMode,
     autoAddActive,
-    addLetter,
+    tryAutoAdd,
   ]);
 
   const startLetterCapture = useCallback(async () => {
@@ -341,14 +338,18 @@ export default function Home() {
   const handleSpeakPhrase = useCallback(() => {
     const textToSpeak =
       phrase || liveData.letter || liveData.word || liveData.dynamicSign;
-    if (textToSpeak) speakPhrase(textToSpeak);
-  }, [phrase, liveData.letter, liveData.word, liveData.dynamicSign, speakPhrase]);
+    if (textToSpeak) {
+      speakPhrase(textToSpeak);
+      if (currentUser) {
+        recordTranslation(currentUser.id, 1, "Señas", textToSpeak).catch(err => console.error("Error saving translation:", err));
+      }
+    }
+  }, [phrase, liveData.letter, liveData.word, liveData.dynamicSign, speakPhrase, currentUser]);
 
   const handleSetPredictionMode = useCallback(
     (mode: string) => {
       setPredictionMode(mode);
       resetLastSpoken();
-      autoAddFrameRef.current = 0;
       lastSpokenPredictionRef.current = "";
       setAutoLastResult(null);
       stopAutoCapture();
@@ -402,94 +403,8 @@ export default function Home() {
 
   return (
     <>
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.5; transform: scale(1.3); }
-        }
-      `}</style>
-      <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-        minHeight: "100vh",
-        background: "transparent",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        padding: "2rem",
-        fontFamily: "'Segoe UI', Roboto, system-ui, sans-serif",
-        color: "#ffffff",
-      }}
-    >
-      <header
-        style={{
-          textAlign: "center",
-          marginBottom: "2rem",
-          position: "relative",
-          width: "100%",
-          maxWidth: "1100px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "1rem",
-            position: "relative",
-          }}
-        >
-          <div style={{ position: "fixed", left: "20px", top: "32px", zIndex: 50 }}>
-            <MenuDrawer>
-              <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: "calc(90vh - 48px)" }}>
-                <h3 style={{ color: "#fff", fontSize: "1.25rem", fontWeight: 700, marginTop: "3rem", marginBottom: "1rem" }}>
-                  Opciones
-                </h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                  <NavButton>Registrar</NavButton>
-                  <NavButton>Estadísticas</NavButton>
-                  <NavButton>Perfil</NavButton>
-                  <NavButton>Ajustes</NavButton>
-                </div>
-                <div style={{ marginTop: "auto", display: "flex", justifyContent: "center", paddingBottom: "2rem" }}>
-                  <FlipButton onClick={handleSignOut} />
-                </div>
-              </div>
-            </MenuDrawer>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-            <svg
-              width="48"
-              height="48"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ color: "#fff" }}
-            >
-              <path d="M18 11V6a2 2 0 0 0-4 0v5" />
-              <path d="M14 10.5V5a2 2 0 0 0-4 0v6" />
-              <path d="M10 10.5V4a2 2 0 0 0-4 0v7" />
-              <path d="M6 11V8a2 2 0 0 0-4 0v10a8 8 0 0 0 8 8h1a8 8 0 0 0 8-8v-3.5a2.5 2 0 0 0-5 0V11" />
-              <path d="M16 11l3-3" />
-              <path d="M4 11l-2-2" />
-              <path d="M10 2v2" />
-            </svg>
-            <h1
-              style={{
-                fontSize: "3.5rem",
-                fontWeight: 800,
-                margin: 0,
-                letterSpacing: "1px",
-                textShadow: "0 2px 10px rgba(0,0,0,0.1)",
-              }}
-            >
-              SIGNUM
-            </h1>
-          </div>
-        </div>
+      {/* Subtitle info for registrar page */}
+      <div style={{ textAlign: "center", width: "100%", maxWidth: "1100px" }}>
         <p style={{ fontSize: "1.1rem", opacity: 0.9, marginTop: "0.5rem" }}>
           Conecta con el mundo usando Lengua de Señas Mexicana.
         </p>
@@ -534,7 +449,7 @@ export default function Home() {
             Modelos locales cargados &bull; Prediccion en navegador
           </div>
         )}
-      </header>
+      </div>
 
       <div
         style={{
@@ -1137,53 +1052,134 @@ export default function Home() {
               <div
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
+                  flexDirection: "column",
+                  gap: "12px",
                   marginTop: "10px",
                   paddingTop: "10px",
                   borderTop: "1px solid #f1f5f9",
-                  flexWrap: "wrap",
-                  gap: "10px",
                 }}
               >
-                <div
-                  style={{
-                    fontSize: "0.9rem",
-                    color: "#64748b",
-                    fontWeight: 600,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    flex: 1,
-                    minWidth: 0,
-                    marginRight: "10px"
-                  }}
-                >
-                {letter && (
-                  <span style={{ marginRight: "12px", color: "#3b82f6", fontWeight: 700 }}>
-                    {letter} <span style={{ fontSize: "0.75rem", fontWeight: 400 }}>({confidence}%)</span>
-                  </span>
-                )}
-                {word && (
-                  <span style={{ marginRight: "12px", color: "#f97316", fontWeight: 700 }}>
-                    {word} <span style={{ fontSize: "0.75rem", fontWeight: 400 }}>({wordConfidence}%)</span>
-                  </span>
-                )}
-                {dynamicSign && (
-                  <span style={{ marginRight: "12px", color: "#a855f7", fontWeight: 700 }}>
-                    {dynamicSign} <span style={{ fontSize: "0.75rem", fontWeight: 400 }}>({dynamicConfidence}%)</span>
-                  </span>
-                )}
-                {!letter && !word && !dynamicSign && (
-                  <span style={{ color: "#94a3b8", fontWeight: 600 }}>—</span>
-                )}
-                </div>
+                {/* Fila 1: Predicción actual (Izquierda) y Botones de Control (Derecha) */}
                 <div
                   style={{
                     display: "flex",
-                    gap: "6px",
+                    justifyContent: "space-between",
                     alignItems: "center",
-                    flexShrink: 0
+                    flexWrap: "wrap",
+                    gap: "10px",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.9rem",
+                      color: "#64748b",
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      flex: 1,
+                      minWidth: "120px",
+                    }}
+                  >
+                    {letter && (
+                      <span style={{ marginRight: "12px", color: "#3b82f6", fontWeight: 700 }}>
+                        {letter} <span style={{ fontSize: "0.75rem", fontWeight: 400 }}>({confidence}%)</span>
+                      </span>
+                    )}
+                    {word && (
+                      <span style={{ marginRight: "12px", color: "#f97316", fontWeight: 700 }}>
+                        {word} <span style={{ fontSize: "0.75rem", fontWeight: 400 }}>({wordConfidence}%)</span>
+                      </span>
+                    )}
+                    {dynamicSign && (
+                      <span style={{ marginRight: "12px", color: "#a855f7", fontWeight: 700 }}>
+                        {dynamicSign} <span style={{ fontSize: "0.75rem", fontWeight: 400 }}>({dynamicConfidence}%)</span>
+                      </span>
+                    )}
+                    {!letter && !word && !dynamicSign && (
+                      <span style={{ color: "#94a3b8", fontWeight: 600 }}>—</span>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                    <button
+                      onClick={addSpace}
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: "8px",
+                        border: "1px solid #e2e8f0",
+                        background: "#f8fafc",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        fontWeight: 600,
+                        color: "#334155",
+                      }}
+                    >
+                      Espacio
+                    </button>
+                    <button
+                      onClick={() => {
+                        let toAdd = "";
+                        let addConfidence = 0;
+                        if (letter && confidence >= 55) {
+                          toAdd = letter;
+                          addConfidence = confidence;
+                        }
+                        if (word && wordConfidence >= 30 && wordConfidence > addConfidence) {
+                          toAdd = word;
+                          addConfidence = wordConfidence;
+                        }
+                        if (dynamicSign && dynamicConfidence >= 30 && dynamicConfidence > addConfidence) {
+                          toAdd = dynamicSign;
+                        }
+                        addLetter(toAdd);
+                        if (toAdd) {
+                          speak(toAdd.trim());
+                          if (currentUser) {
+                            recordTranslation(currentUser.id, 1, "Señas", toAdd.trim()).catch(err => console.error("Error saving translation:", err));
+                          }
+                        }
+                      }}
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: "8px",
+                        border: "none",
+                        background: "#0f3a73",
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Añadir (+)
+                    </button>
+                    <button
+                      onClick={backspace}
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: "8px",
+                        border: "1px solid #e2e8f0",
+                        background: "#f8fafc",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        fontWeight: 600,
+                        color: "#334155",
+                      }}
+                    >
+                      Borrar
+                    </button>
+                  </div>
+                </div>
+
+                {/* Fila 2: Checkboxes de Configuración */}
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "15px",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    borderTop: "1px solid #f1f5f9",
+                    paddingTop: "8px",
                   }}
                 >
                   <label
@@ -1191,25 +1187,27 @@ export default function Home() {
                       fontSize: "0.8rem",
                       display: "flex",
                       alignItems: "center",
-                      gap: "4px",
-                      marginRight: "10px",
+                      gap: "6px",
                       cursor: "pointer",
+                      color: "#475569",
+                      fontWeight: 500,
                     }}
                   >
                     <Checkbox
                       checked={autoAddActive}
                       onChange={(e) => setAutoAddActive(e.target.checked)}
                     />
-                    Auto-Anadir
+                    Auto-Añadir
                   </label>
                   <label
                     style={{
                       fontSize: "0.8rem",
                       display: "flex",
                       alignItems: "center",
-                      gap: "4px",
-                      marginRight: "10px",
+                      gap: "6px",
                       cursor: "pointer",
+                      color: "#475569",
+                      fontWeight: 500,
                     }}
                   >
                     <Checkbox
@@ -1218,66 +1216,23 @@ export default function Home() {
                     />
                     Voz al detectar
                   </label>
-                  <button
-                    onClick={addSpace}
+                  <label
                     style={{
-                      padding: "6px 10px",
-                      borderRadius: "8px",
-                      border: "1px solid #e2e8f0",
-                      background: "#f8fafc",
-                      cursor: "pointer",
                       fontSize: "0.8rem",
-                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      cursor: "pointer",
+                      color: "#475569",
+                      fontWeight: 500,
                     }}
                   >
-                    _
-                  </button>
-                  <button
-                    onClick={() => {
-                    // Use the highest-confidence active prediction
-                    let toAdd = "";
-                    let addConfidence = 0;
-                    if (letter && confidence >= 55) {
-                      toAdd = letter;
-                      addConfidence = confidence;
-                    }
-                    if (word && wordConfidence >= 30 && wordConfidence > addConfidence) {
-                      toAdd = word;
-                      addConfidence = wordConfidence;
-                    }
-                    if (dynamicSign && dynamicConfidence >= 30 && dynamicConfidence > addConfidence) {
-                      toAdd = dynamicSign;
-                    }
-                    addLetter(toAdd);
-                    if (toAdd) speak(toAdd.trim());
-                    }}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: "8px",
-                      border: "none",
-                      background: "#0f3a73",
-                      color: "#fff",
-                      cursor: "pointer",
-                      fontSize: "0.8rem",
-                      fontWeight: 600,
-                    }}
-                  >
-                    +
-                  </button>
-                  <button
-                    onClick={backspace}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: "8px",
-                      border: "1px solid #e2e8f0",
-                      background: "#f8fafc",
-                      cursor: "pointer",
-                      fontSize: "0.8rem",
-                      fontWeight: 600,
-                    }}
-                  >
-                    &#9003;
-                  </button>
+                    <Checkbox
+                      checked={preventRepeat}
+                      onChange={(e) => setPreventRepeat(e.target.checked)}
+                    />
+                    No repetir
+                  </label>
                 </div>
               </div>
             </div>
@@ -1318,7 +1273,6 @@ export default function Home() {
           )}
         </LiquidGlass>
       </div>
-    </div>
     </>
-    );
-  }
+  );
+}

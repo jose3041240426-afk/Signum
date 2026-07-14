@@ -165,8 +165,13 @@ function speakWithNativeAPI(text: string, voice: SpeechSynthesisVoice): Promise<
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.voice = voice;
     utterance.lang = voice.lang || "es-MX";
-    utterance.rate = 0.95;
-    utterance.pitch = 1.0;
+    
+    // Obtener valores personalizados de la configuración
+    const savedRate = typeof window !== "undefined" ? window.localStorage.getItem("ttsRate") : null;
+    const savedPitch = typeof window !== "undefined" ? window.localStorage.getItem("ttsPitch") : null;
+    
+    utterance.rate = savedRate ? parseFloat(savedRate) : 0.95;
+    utterance.pitch = savedPitch ? parseFloat(savedPitch) : 1.0;
     utterance.volume = 1.0;
 
     let settled = false;

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "./styles/signum-globals.css";
+import "./styles/transitions.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,6 +20,7 @@ export const metadata: Metadata = {
 };
 
 import { FluidBackground } from "@/components/layout/FluidBackground";
+import { PageTransition } from "@/components/layout/PageTransition";
 
 export default function RootLayout({
   children,
@@ -35,7 +37,7 @@ export default function RootLayout({
             <feDisplacementMap in="SourceGraphic" in2="turbulence" scale="40" xChannelSelector="R" yChannelSelector="G" />
           </filter>
         </svg>
-        {children}
+        <PageTransition>{children}</PageTransition>
       </body>
     </html>
   );
