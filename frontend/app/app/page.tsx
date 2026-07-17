@@ -55,6 +55,7 @@ export default function Home() {
   const {
     data: liveData,
     cameraOn,
+    cameraError,
     toggleCamera,
     videoRef,
     canvasRef,
@@ -76,6 +77,14 @@ export default function Home() {
     trainDynamic,
   } = useModelTraining();
 
+  const handleAutoTranslated = useCallback((label: string, confidence: number) => {
+    const userId = currentUser?.id;
+    if (!userId || !label) return;
+    recordTranslation(userId, 1, "Señas", label, confidence).catch(err =>
+      console.error("Error saving translation:", err),
+    );
+  }, [currentUser?.id]);
+
   const {
     phrase,
     setPhrase,
@@ -84,19 +93,46 @@ export default function Home() {
     preventRepeat,
     setPreventRepeat,
     addLetter,
+    addWord,
     addSpace,
     backspace,
     tryAutoAdd,
     resetStableCount,
-  } = usePhraseBuilder();
+  } = usePhraseBuilder(handleAutoTranslated);
 
   const { speak, speakPhrase, resetLastSpoken } = useTTS();
+
+  const [isCompleting, setIsCompleting] = useState(false);
+
+  const handleAIComplete = useCallback(async () => {
+    if (!phrase || phrase.length < 3 || isCompleting) return;
+    setIsCompleting(true);
+    try {
+      const res = await fetch("/api/ai/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phrase }),
+      });
+      const data = await res.json();
+      if (data.completed) {
+        setPhrase(data.completed);
+        setStatusMessage("Frase corregida con IA");
+      }
+    } catch (err) {
+      console.error("Error al completar frase:", err);
+    } finally {
+      setIsCompleting(false);
+    }
+  }, [phrase, isCompleting, setPhrase]);
 
   const [statusMessage, setStatusMessage] = useState("Cargando...");
   const [ttsAvailable, setTtsAvailable] = useState(false);
   const prevCaptureDoneRef = useRef(false);
   const lastSpokenPredictionRef = useRef("");
-  const [soundOnSeña, setSoundOnSeña] = useState(false);
+  const [soundOnSeña, setSoundOnSeña] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("soundOnSeña") === "true";
+    return false;
+  });
   const [autoCountdown, setAutoCountdown] = useState(0);
   const [autoDuration, setAutoDuration] = useState(3);
   const [autoMotionThreshold, setAutoMotionThreshold] = useState(0.015);
@@ -243,7 +279,7 @@ export default function Home() {
     }
 
     if (currentPrediction) {
-      tryAutoAdd(currentPrediction + (isWord ? " " : ""), currentConfidence);
+      tryAutoAdd(currentPrediction, currentConfidence, isWord);
     }
   }, [
     liveData.letter,
@@ -341,10 +377,11 @@ export default function Home() {
     if (textToSpeak) {
       speakPhrase(textToSpeak);
       if (currentUser) {
-        recordTranslation(currentUser.id, 1, "Señas", textToSpeak).catch(err => console.error("Error saving translation:", err));
+        const conf = liveData.wordConfidence || liveData.dynamicConfidence || liveData.confidence || 0;
+        recordTranslation(currentUser.id, 1, "Señas", textToSpeak, conf).catch(err => console.error("Error saving translation:", err));
       }
     }
-  }, [phrase, liveData.letter, liveData.word, liveData.dynamicSign, speakPhrase, currentUser]);
+  }, [phrase, liveData.letter, liveData.word, liveData.dynamicSign, liveData.confidence, liveData.wordConfidence, liveData.dynamicConfidence, speakPhrase, currentUser]);
 
   const handleSetPredictionMode = useCallback(
     (mode: string) => {
@@ -404,7 +441,7 @@ export default function Home() {
   return (
     <>
       {/* Subtitle info for registrar page */}
-      <div style={{ textAlign: "center", width: "100%", maxWidth: "1100px" }}>
+      <div style={{ textAlign: "center", width: "100%", maxWidth: "1100px", marginBottom: "10px" }}>
         <p style={{ fontSize: "1.1rem", opacity: 0.9, marginTop: "0.5rem" }}>
           Conecta con el mundo usando Lengua de Señas Mexicana.
         </p>
@@ -444,6 +481,7 @@ export default function Home() {
               fontSize: "0.75rem",
               color: "#4ade80",
               marginTop: "4px",
+              marginBottom: "10px",
             }}
           >
             Modelos locales cargados &bull; Prediccion en navegador
@@ -452,6 +490,7 @@ export default function Home() {
       </div>
 
       <div
+        className="stagger"
         style={{
           display: "flex",
           gap: "2rem",
@@ -509,6 +548,21 @@ export default function Home() {
               ></div>
               {cameraOn ? "Camara activa (MediaPipe)" : "Camara inactiva"}
             </div>
+
+            {cameraError && !cameraOn && (
+              <div style={{
+                marginTop: "8px",
+                padding: "10px 14px",
+                borderRadius: "10px",
+                background: "rgba(239,68,68,0.15)",
+                border: "1px solid rgba(239,68,68,0.3)",
+                color: "#fca5a5",
+                fontSize: "0.85rem",
+                lineHeight: "1.4",
+              }}>
+                {cameraError}
+              </div>
+            )}
 
             {cameraOn ? (
               <>
@@ -1121,6 +1175,7 @@ export default function Home() {
                       onClick={() => {
                         let toAdd = "";
                         let addConfidence = 0;
+                        let isWord = false;
                         if (letter && confidence >= 55) {
                           toAdd = letter;
                           addConfidence = confidence;
@@ -1128,16 +1183,18 @@ export default function Home() {
                         if (word && wordConfidence >= 30 && wordConfidence > addConfidence) {
                           toAdd = word;
                           addConfidence = wordConfidence;
+                          isWord = true;
                         }
                         if (dynamicSign && dynamicConfidence >= 30 && dynamicConfidence > addConfidence) {
                           toAdd = dynamicSign;
+                          isWord = true;
                         }
-                        addLetter(toAdd);
-                        if (toAdd) {
-                          speak(toAdd.trim());
-                          if (currentUser) {
-                            recordTranslation(currentUser.id, 1, "Señas", toAdd.trim()).catch(err => console.error("Error saving translation:", err));
-                          }
+                        if (!toAdd) return;
+                        if (isWord) addWord(toAdd.trim());
+                        else addLetter(toAdd.trim());
+                        speak(toAdd.trim());
+                        if (currentUser) {
+                          recordTranslation(currentUser.id, 1, "Señas", toAdd.trim(), addConfidence).catch(err => console.error("Error saving translation:", err));
                         }
                       }}
                       style={{
@@ -1167,6 +1224,38 @@ export default function Home() {
                       }}
                     >
                       Borrar
+                    </button>
+                    <button
+                      onClick={handleAIComplete}
+                      disabled={isCompleting || phrase.length < 3}
+                      title="Completar frase con Inteligencia Artificial"
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: "8px",
+                        border: "1px solid #a855f7",
+                        background: isCompleting ? "rgba(168,85,247,0.3)" : "rgba(168,85,247,0.1)",
+                        cursor: isCompleting || phrase.length < 3 ? "not-allowed" : "pointer",
+                        fontSize: "0.85rem",
+                        fontWeight: 600,
+                        color: isCompleting ? "#c4b5fd" : "#c084fc",
+                        opacity: isCompleting || phrase.length < 3 ? 0.5 : 1,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      }}
+                    >
+                      {isCompleting ? (
+                        <span className="ai-loader">
+                          <span className="bar" />
+                          <span className="bar" />
+                          <span className="bar" />
+                        </span>
+                      ) : (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                        </svg>
+                      )}
+                      IA
                     </button>
                   </div>
                 </div>
@@ -1212,7 +1301,10 @@ export default function Home() {
                   >
                     <Checkbox
                       checked={soundOnSeña}
-                      onChange={(e) => setSoundOnSeña(e.target.checked)}
+                      onChange={(e) => {
+                        setSoundOnSeña(e.target.checked);
+                        localStorage.setItem("soundOnSeña", String(e.target.checked));
+                      }}
                     />
                     Voz al detectar
                   </label>
@@ -1259,6 +1351,7 @@ export default function Home() {
           </button>
           {(trainingMessage || trainingWordsMessage || trainingDynamicMessage) && (
             <div
+              className="animate-fade-in"
               style={{
                 fontSize: "0.85rem",
                 color: "#fff",
@@ -1266,6 +1359,7 @@ export default function Home() {
                 background: "rgba(0,0,0,0.3)",
                 padding: "8px 16px",
                 borderRadius: "8px",
+                marginTop: "16px",
               }}
             >
               {trainingMessage || trainingWordsMessage || trainingDynamicMessage}

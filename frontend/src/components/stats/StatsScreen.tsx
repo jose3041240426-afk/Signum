@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { getUserStats, getUserTranslations, getUserLogins } from "@/services/auth.service";
 import { LiquidGlass } from "@/components/ui/LiquidGlass";
+import FramerCarousel from "@/components/ui/FramerCarousel";
 
 interface StatsScreenProps {
   userId: string | null;
@@ -32,7 +33,7 @@ export function StatsScreen({ userId }: StatsScreenProps) {
         setLogins(loginsData);
       } catch (err: any) {
         console.error("Error al cargar estadísticas:", err);
-        setError("Ocurrió un error al cargar las estadísticas de uso.");
+        setError(err?.message || err?.error_description || "Ocurrió un error al cargar las estadísticas de uso.");
       } finally {
         setLoading(false);
       }
@@ -43,6 +44,17 @@ export function StatsScreen({ userId }: StatsScreenProps) {
   // Aggregate translation counts and minutes
   const totalTranslations = stats.reduce((sum, item) => sum + (item.traducciones_realizadas || 0), 0);
   const totalMinutes = stats.reduce((sum, item) => sum + (item.tiempo_uso_minutos || 0), 0);
+
+  // Average precision from individual translations
+  const avgTranslationPrecision = translations.length > 0
+    ? (translations.reduce((sum: number, t: any) => sum + (t.precision || 0), 0) / translations.length).toFixed(1)
+    : "0";
+
+  // Weighted average precision from avances
+  const totalPrecisionWeight = stats.reduce((sum, item) => sum + (item.traducciones_realizadas || 0), 0);
+  const avgPrecision = totalPrecisionWeight > 0
+    ? Math.round((stats.reduce((sum: number, item: any) => sum + (item.precision_promedio || 0) * (item.traducciones_realizadas || 0), 0) / totalPrecisionWeight) * 10) / 10
+    : 0;
 
   if (!userId) {
     return (
@@ -90,19 +102,23 @@ export function StatsScreen({ userId }: StatsScreenProps) {
   if (loading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", padding: "4rem" }}>
-        <div style={{ border: "4px solid rgba(255,255,255,0.1)", borderTop: "4px solid #fff", borderRadius: "50%", width: "40px", height: "40px", animation: "spin 1s linear infinite" }} />
+        <span className="ai-loader">
+          <span className="bar" />
+          <span className="bar" />
+          <span className="bar" />
+        </span>
       </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: "1100px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "2rem" }}>
+    <div className="stagger" style={{ maxWidth: "1100px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "2rem" }}>
       {/* Top Section / Header */}
       <div>
-        <h2 style={{ fontSize: "2rem", fontWeight: 800, margin: 0, background: "linear-gradient(to right, #fff, #93c5fd)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+        <h2 style={{ fontSize: "2rem", fontWeight: 800, margin: 0, color: "#ffffff" }}>
           Mis Estadísticas
         </h2>
-        <p style={{ fontSize: "0.9rem", opacity: 0.7, marginTop: "4px" }}>
+          <p style={{ fontSize: "0.9rem", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>
           Monitorea tus traducciones y uso general de la plataforma
         </p>
       </div>
@@ -113,44 +129,76 @@ export function StatsScreen({ userId }: StatsScreenProps) {
         </div>
       )}
 
-      {/* Summary Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1.5rem" }}>
-        <LiquidGlass style={{ padding: "1.5rem 2rem", display: "flex", alignItems: "center", gap: "1.5rem" }}>
-          <div style={{ background: "linear-gradient(135deg, #1e3a8a, #3b82f6)", borderRadius: "16px", padding: "14px", display: "flex", justifyContent: "center", alignItems: "center" }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-          </div>
-          <div>
-            <h3 style={{ fontSize: "2.2rem", fontWeight: 800, margin: 0 }}>{totalTranslations}</h3>
-            <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", opacity: 0.7, fontWeight: 600 }}>Traducciones Realizadas</p>
-          </div>
-        </LiquidGlass>
-
-        <LiquidGlass style={{ padding: "1.5rem 2rem", display: "flex", alignItems: "center", gap: "1.5rem" }}>
-          <div style={{ background: "linear-gradient(135deg, #065f46, #10b981)", borderRadius: "16px", padding: "14px", display: "flex", justifyContent: "center", alignItems: "center" }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-          </div>
-          <div>
-            <h3 style={{ fontSize: "2.2rem", fontWeight: 800, margin: 0 }}>{totalMinutes} <span style={{ fontSize: "1rem", fontWeight: 400 }}>min</span></h3>
-            <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", opacity: 0.7, fontWeight: 600 }}>Tiempo de Uso Total</p>
-          </div>
-        </LiquidGlass>
-
-        <LiquidGlass style={{ padding: "1.5rem 2rem", display: "flex", alignItems: "center", gap: "1.5rem" }}>
-          <div style={{ background: "linear-gradient(135deg, #7c2d12, #f97316)", borderRadius: "16px", padding: "14px", display: "flex", justifyContent: "center", alignItems: "center" }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-            </svg>
-          </div>
-          <div>
-            <h3 style={{ fontSize: "2.2rem", fontWeight: 800, margin: 0 }}>{stats.length}</h3>
-            <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", opacity: 0.7, fontWeight: 600 }}>Días de Actividad</p>
-          </div>
-        </LiquidGlass>
+      {/* Summary Cards - Carrusel con flechas */}
+      <div style={{ position: "relative", paddingBottom: "36px" }}>
+        <FramerCarousel slides={[
+        {
+          id: "traducciones",
+          content: (
+            <LiquidGlass style={{ padding: "1.5rem 2rem", display: "flex", alignItems: "center", gap: "1.5rem" }}>
+              <div style={{ background: "linear-gradient(135deg, #1e3a8a, #3b82f6)", borderRadius: "16px", padding: "14px", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+              </div>
+              <div>
+                <h3 style={{ fontSize: "2.2rem", fontWeight: 800, margin: 0 }}>{totalTranslations}</h3>
+                <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", opacity: 0.7, fontWeight: 600 }}>Traducciones Realizadas</p>
+              </div>
+            </LiquidGlass>
+          ),
+        },
+        {
+          id: "tiempo",
+          content: (
+            <LiquidGlass style={{ padding: "1.5rem 2rem", display: "flex", alignItems: "center", gap: "1.5rem" }}>
+              <div style={{ background: "linear-gradient(135deg, #065f46, #10b981)", borderRadius: "16px", padding: "14px", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+              </div>
+              <div>
+                <h3 style={{ fontSize: "2.2rem", fontWeight: 800, margin: 0 }}>{totalMinutes >= 60 ? `${(totalMinutes / 60).toFixed(1)}` : totalMinutes} <span style={{ fontSize: "1rem", fontWeight: 400 }}>{totalMinutes >= 60 ? "h" : "min"}</span></h3>
+                <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", opacity: 0.7, fontWeight: 600 }}>Tiempo de Uso Total</p>
+              </div>
+            </LiquidGlass>
+          ),
+        },
+        {
+          id: "dias",
+          content: (
+            <LiquidGlass style={{ padding: "1.5rem 2rem", display: "flex", alignItems: "center", gap: "1.5rem" }}>
+              <div style={{ background: "linear-gradient(135deg, #7c2d12, #f97316)", borderRadius: "16px", padding: "14px", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                </svg>
+              </div>
+              <div>
+                <h3 style={{ fontSize: "2.2rem", fontWeight: 800, margin: 0 }}>{stats.length}</h3>
+                <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", opacity: 0.7, fontWeight: 600 }}>Días de Actividad</p>
+              </div>
+            </LiquidGlass>
+          ),
+        },
+        {
+          id: "precision",
+          content: (
+            <LiquidGlass style={{ padding: "1.5rem 2rem", display: "flex", alignItems: "center", gap: "1.5rem" }}>
+              <div style={{ background: "linear-gradient(135deg, #581c87, #a855f7)", borderRadius: "16px", padding: "14px", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 11l3 3L22 4" />
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                </svg>
+              </div>
+              <div>
+                <h3 style={{ fontSize: "2.2rem", fontWeight: 800, margin: 0 }}>{avgTranslationPrecision}<span style={{ fontSize: "1rem", fontWeight: 400 }}>%</span></h3>
+                <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", opacity: 0.7, fontWeight: 600 }}>Precisión Promedio</p>
+              </div>
+            </LiquidGlass>
+          ),
+        },
+      ]} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "1.5rem", flexWrap: "wrap" }}>
@@ -169,6 +217,7 @@ export function StatsScreen({ userId }: StatsScreenProps) {
                     <th style={{ padding: "12px 8px" }}>Tipo</th>
                     <th style={{ padding: "12px 8px" }}>Original</th>
                     <th style={{ padding: "12px 8px" }}>Traducción</th>
+                    <th style={{ padding: "12px 8px" }}>Precisión</th>
                     <th style={{ padding: "12px 8px" }}>Fecha / Hora</th>
                   </tr>
                 </thead>
@@ -176,12 +225,21 @@ export function StatsScreen({ userId }: StatsScreenProps) {
                   {translations.map((t) => (
                     <tr key={t.id_traduccion} style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", transition: "background 0.2s" }} onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.03)"} onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
                       <td style={{ padding: "14px 8px" }}>
-                        <span style={{ background: "rgba(37,99,235,0.2)", color: "#93c5fd", padding: "4px 8px", borderRadius: "12px", fontSize: "0.75rem", fontWeight: 600 }}>
+                        <span style={{ background: "rgba(37,99,235,0.2)", color: "#ffffff", padding: "4px 8px", borderRadius: "12px", fontSize: "0.75rem", fontWeight: 600 }}>
                           {t.catalogo_tipo_traduccion?.tipo || "LSM"}
                         </span>
                       </td>
                       <td style={{ padding: "14px 8px", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.texto_original}</td>
-                      <td style={{ padding: "14px 8px", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#60a5fa", fontWeight: 500 }}>{t.texto_traducido}</td>
+                      <td style={{ padding: "14px 8px", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#ffffff", fontWeight: 500 }}>{t.texto_traducido}</td>
+                      <td style={{ padding: "14px 8px" }}>
+                        <span style={{
+                          color: "#ffffff",
+                          fontWeight: 600,
+                          fontSize: "0.85rem"
+                        }}>
+                          {(t.precision || 0).toFixed(1)}%
+                        </span>
+                      </td>
                       <td style={{ padding: "14px 8px", opacity: 0.8 }}>
                         {new Date(t.fecha_hora).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" })}
                       </td>

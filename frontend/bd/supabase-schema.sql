@@ -76,6 +76,7 @@ CREATE TABLE public.traducciones (
   id_tipo integer NOT NULL REFERENCES public.catalogo_tipo_traduccion(id_tipo),
   texto_original text NOT NULL,
   texto_traducido text NOT NULL,
+  precision real DEFAULT 0,
   fecha_hora timestamp DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -84,7 +85,38 @@ CREATE TABLE public.avances (
   id_usuario uuid NOT NULL REFERENCES public.usuarios(id_usuario) ON DELETE CASCADE,
   traducciones_realizadas integer DEFAULT 0,
   tiempo_uso_minutos integer DEFAULT 0,
+  precision_promedio real DEFAULT 0,
   fecha date DEFAULT CURRENT_DATE
+);
+
+-- 5. Tabla de evaluaciones del proyecto
+-- -----------------------------------------
+
+CREATE TABLE public.evaluaciones (
+  id_evaluacion serial PRIMARY KEY,
+  id_usuario uuid REFERENCES public.usuarios(id_usuario) ON DELETE SET NULL,
+  resolucion text,
+  iluminacion text,
+  distancia text,
+  p4_uso_frecuente integer CHECK (p4_uso_frecuente BETWEEN 1 AND 5),
+  p5_complicado integer CHECK (p5_complicado BETWEEN 1 AND 5),
+  p6_facil_interactuar integer CHECK (p6_facil_interactuar BETWEEN 1 AND 5),
+  p7_necesita_ayuda integer CHECK (p7_necesita_ayuda BETWEEN 1 AND 5),
+  p8_traduccion_natural integer CHECK (p8_traduccion_natural BETWEEN 1 AND 5),
+  voz_satisfaccion integer CHECK (voz_satisfaccion BETWEEN 1 AND 5),
+  esfuerzo_mental text,
+  dispositivo text,
+  navegador text,
+  experiencia_previa text,
+  problemas text,
+  sugerencias text,
+  experiencia_general integer CHECK (experiencia_general BETWEEN 1 AND 5),
+  recomendaria text,
+  facil_aprender integer CHECK (facil_aprender BETWEEN 1 AND 5),
+  util_educativo integer CHECK (util_educativo BETWEEN 1 AND 5),
+  funcion_mas_util text,
+  senas_dificiles text,
+  fecha timestamp DEFAULT CURRENT_TIMESTAMP
 );
 
 -- =============================================
@@ -160,6 +192,7 @@ ALTER TABLE public.avances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.catalogo_generos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.catalogo_tipo_traduccion ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.evaluaciones ENABLE ROW LEVEL SECURITY;
 
 -- Catálogos: cualquier usuario autenticado puede leer
 CREATE POLICY "Usuarios autenticados pueden leer géneros"
@@ -213,11 +246,32 @@ CREATE POLICY "Usuarios pueden insertar sus propios avances"
 
 CREATE POLICY "Usuarios pueden ver sus propios avances"
   ON public.avances FOR SELECT
+  
   USING (auth.uid() = id_usuario);
 
 CREATE POLICY "Usuarios pueden actualizar sus propios avances"
   ON public.avances FOR UPDATE
   USING (auth.uid() = id_usuario);
+
+-- Evaluaciones: cualquier usuario autenticado puede insertar su propia evaluacion
+CREATE POLICY "Usuarios pueden insertar evaluaciones"
+  ON public.evaluaciones FOR INSERT
+  WITH CHECK (auth.uid() = id_usuario OR id_usuario IS NULL);
+
+CREATE POLICY "Usuarios pueden ver sus propias evaluaciones"
+  ON public.evaluaciones FOR SELECT
+  USING (auth.uid() = id_usuario OR id_usuario IS NULL);
+
+CREATE POLICY "Administradores pueden ver todas las evaluaciones"
+  ON public.evaluaciones FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.usuario_roles ur
+      JOIN public.roles r ON ur.id_rol = r.id_rol
+      WHERE ur.id_usuario = auth.uid()
+      AND r.nombre_rol = 'Administrador'
+    )
+  );
 
 -- =============================================
 -- Permisos

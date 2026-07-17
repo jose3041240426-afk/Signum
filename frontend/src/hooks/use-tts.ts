@@ -1,11 +1,11 @@
 import { useRef, useCallback } from "react";
-import { speakNative, isNativeTTSAvailable } from "@/services/tts.service";
+import { speak, isNativeTTSAvailable } from "@/services/tts.service";
 
 export function useTTS() {
   const speakingRef = useRef(false);
   const lastSpokenRef = useRef("");
 
-  const speak = useCallback(async (text: string) => {
+  const speakTTS = useCallback(async (text: string) => {
     if (!text) return;
     resetLastSpoken();
     if (speakingRef.current) {
@@ -15,9 +15,7 @@ export function useTTS() {
     speakingRef.current = true;
     lastSpokenRef.current = text;
     try {
-      if (isNativeTTSAvailable()) {
-        await speakNative(text);
-      }
+      await speak(text);
     } catch {
     } finally {
       speakingRef.current = false;
@@ -32,9 +30,7 @@ export function useTTS() {
     }
     speakingRef.current = true;
     try {
-      if (isNativeTTSAvailable()) {
-        await speakNative(text);
-      }
+      await speak(text);
     } catch {
     } finally {
       speakingRef.current = false;
@@ -45,5 +41,5 @@ export function useTTS() {
     lastSpokenRef.current = "";
   }, []);
 
-  return { speak, speakPhrase, resetLastSpoken };
+  return { speak: speakTTS, speakPhrase, resetLastSpoken };
 }

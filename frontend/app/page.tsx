@@ -1,8 +1,18 @@
 "use client";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { getCurrentUser } from "@/services/auth.service";
 
 export default function Home() {
   const router = useRouter();
+
+  useEffect(() => {
+    getCurrentUser().then((user) => {
+      if (user) {
+        router.push("/app");
+      }
+    }).catch(console.error);
+  }, [router]);
 
   return (
     <div
@@ -29,20 +39,12 @@ export default function Home() {
           width="64"
           height="64"
           viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
           style={{ color: "#fff" }}
         >
-          <path d="M18 11V6a2 2 0 0 0-4 0v5" />
-          <path d="M14 10.5V5a2 2 0 0 0-4 0v6" />
-          <path d="M10 10.5V4a2 2 0 0 0-4 0v7" />
-          <path d="M6 11V8a2 2 0 0 0-4 0v10a8 8 0 0 0 8 8h1a8 8 0 0 0 8-8v-3.5a2.5 2 0 0 0-5 0V11" />
-          <path d="M16 11l3-3" />
-          <path d="M4 11l-2-2" />
-          <path d="M10 2v2" />
+          <path
+            fill="currentColor"
+            d="M10.2 3c0-1.105.696-2 1.8-2s1.8.895 1.8 2l.2 8c0-.364.5-5.66.5-6c0-1 .595-2 1.7-2s1.8.895 1.8 2v7.268c.083-.048.3-3.846.3-4.268c0-1 .263-2 1.2-2c.938 0 1.5.895 1.5 2v6a8 8 0 0 1-8 8h-.674a8 8 0 0 1-7.155-4.422l-2.842-5.684c-.364-.728-.084-1.668.72-2.024c.423-.187.897-.292 1.343-.15c1.108.353.944.86 1.608 1.49V5c0-1.105.695-2 1.8-2c1 0 1.609 1.315 1.7 2c.125.938.5 5.634.5 5.998z"
+          />
         </svg>
         <h1
           style={{
@@ -134,6 +136,7 @@ export default function Home() {
         <button
           onClick={() => router.push("/app")}
           style={{
+            display: "none",
             background: "none",
             border: "none",
             color: "rgba(255,255,255,0.6)",

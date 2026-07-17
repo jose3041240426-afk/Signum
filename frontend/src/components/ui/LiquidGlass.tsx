@@ -18,6 +18,7 @@ export function LiquidGlass({
           position: relative;
           border-radius: 24px;
           overflow: hidden;
+          border: var(--glass-border, 0px solid rgba(255, 255, 255, 0.3));
         }
         .lq-bend {
           position: absolute;

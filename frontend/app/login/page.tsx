@@ -1,10 +1,18 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { signIn } from "@/services/auth.service";
+import { signIn, getCurrentUser } from "@/services/auth.service";
 
 export default function LoginPage() {
   const router = useRouter();
+  
+  useEffect(() => {
+    getCurrentUser().then((user) => {
+      if (user) {
+        router.push("/app");
+      }
+    }).catch(console.error);
+  }, [router]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -37,6 +45,7 @@ export default function LoginPage() {
       }}
     >
       <div
+        className="stagger"
         style={{
           background: "rgba(255,255,255,0.08)",
           backdropFilter: "blur(16px)",

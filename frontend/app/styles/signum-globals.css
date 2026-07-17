@@ -123,3 +123,370 @@
   opacity: 0;
   animation: slideUpFade 0.4s ease-out 0.2s forwards;
 }
+
+.animate-step-4 {
+  opacity: 0;
+  animation: slideUpFade 0.4s ease-out 0.3s forwards;
+}
+
+.animate-step-5 {
+  opacity: 0;
+  animation: slideUpFade 0.4s ease-out 0.4s forwards;
+}
+
+.animate-step-6 {
+  opacity: 0;
+  animation: slideUpFade 0.4s ease-out 0.5s forwards;
+}
+
+.animate-step-7 {
+  opacity: 0;
+  animation: slideUpFade 0.4s ease-out 0.6s forwards;
+}
+
+.animate-step-8 {
+  opacity: 0;
+  animation: slideUpFade 0.4s ease-out 0.7s forwards;
+}
+
+/* Animación escalonada genérica: aplica slideUpFade a cada hijo directo con un retraso incremental */
+.stagger > * {
+  opacity: 0;
+  animation: slideUpFade 0.4s ease-out forwards;
+}
+
+.stagger > *:nth-child(1) { animation-delay: 0.05s; }
+.stagger > *:nth-child(2) { animation-delay: 0.10s; }
+.stagger > *:nth-child(3) { animation-delay: 0.15s; }
+.stagger > *:nth-child(4) { animation-delay: 0.20s; }
+.stagger > *:nth-child(5) { animation-delay: 0.25s; }
+.stagger > *:nth-child(6) { animation-delay: 0.30s; }
+.stagger > *:nth-child(7) { animation-delay: 0.35s; }
+.stagger > *:nth-child(8) { animation-delay: 0.40s; }
+.stagger > *:nth-child(n+9) { animation-delay: 0.45s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-step-1,
+  .animate-step-2,
+  .animate-step-3,
+  .animate-step-4,
+  .animate-step-5,
+  .animate-step-6,
+  .animate-step-7,
+  .animate-step-8,
+  .stagger > * {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* Loader animado de tres barras (para botón IA) */
+.ai-loader {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+}
+
+.ai-loader .bar {
+  display: inline-block;
+  width: 3px;
+  height: 20px;
+  background-color: rgba(255, 255, 255, 0.5);
+  border-radius: 10px;
+  animation: scale-up4 1s linear infinite;
+}
+
+.ai-loader .bar:nth-child(2) {
+  height: 35px;
+  margin: 0 5px;
+  animation-delay: 0.25s;
+}
+
+.ai-loader .bar:nth-child(3) {
+  animation-delay: 0.5s;
+}
+
+@keyframes scale-up4 {
+  20% {
+    background-color: #fff;
+    transform: scaleY(1.5);
+  }
+  40% {
+    transform: scaleY(1);
+  }
+}
+
+/* Modal de entrenamiento */
+.train-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.train-modal {
+  width: 350px;
+  height: 180px;
+  border-radius: 16px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-evenly;
+  padding: 30px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.train-modal label {
+  color: #002;
+  font-size: 18px;
+  font-weight: 600;
+  animation: train-pulse 0.6s alternate infinite;
+}
+
+.train-modal .train-bar {
+  width: 100%;
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 10px;
+  position: relative;
+  overflow: hidden;
+}
+
+.train-modal .train-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  height: 100%;
+  background: #0f3a73;
+  border-radius: 10px;
+  animation: train-loading 0.6s alternate infinite;
+}
+
+@keyframes train-pulse {
+  from { opacity: 0.3; }
+  to   { opacity: 1; }
+}
+
+@keyframes train-loading {
+  0%   { left: 0%; }
+  100% { left: 50%; }
+}
+
+.animate-fade-in {
+  animation: fadeInUp 0.4s ease-out forwards;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Custom slider horizontal (sin icono de audio) */
+.custom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 50px;
+  background: rgb(82, 82, 82);
+  border-radius: 9px;
+  overflow: hidden;
+  cursor: pointer;
+  accent-color: #fff;
+}
+
+.custom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 0;
+  height: 0;
+  box-shadow: -9999px 0 0 9999px #fff;
+}
+
+.custom-slider::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border-radius: 0;
+  border: none;
+  box-shadow: -9999px 0 0 9999px #fff;
+}
+
+/* Lista de voces ElevenLabs con hover */
+.voice-list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background: #0D1117;
+  border-radius: 10px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.voice-list .voice-option {
+  background: transparent;
+  border: none;
+  padding: 10px 12px;
+  color: white;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  position: relative;
+  font-size: 0.85rem;
+  text-align: left;
+  width: 100%;
+}
+
+.voice-list .voice-option:not(:active):hover,
+.voice-list .voice-option:focus {
+  background-color: #21262C;
+}
+
+.voice-list .voice-option:focus,
+.voice-list .voice-option:active {
+  background-color: #1A1F24;
+  outline: none;
+}
+
+.voice-list .voice-option.selected {
+  background-color: rgba(15, 58, 115, 0.4);
+}
+
+.voice-list .voice-option::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 0;
+  width: 3px;
+  height: 75%;
+  background-color: #2F81F7;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.voice-list .voice-option.selected::before {
+  opacity: 1;
+}
+
+.voice-list:hover > :not(.voice-option:hover) {
+  opacity: 0.7;
+}
+
+.voice-list .voice-option:hover {
+  transition: 300ms;
+}
+
+/* Glass radio group para 2 opciones */
+.glass-radio-group-2 {
+  --bg: rgba(255, 255, 255, 0.4);
+  display: flex;
+  position: relative;
+  background: var(--bg);
+  border-radius: 1rem;
+  backdrop-filter: blur(12px);
+  box-shadow:
+    inset 1px 1px 4px rgba(255, 255, 255, 0.4),
+    inset -1px -1px 6px rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  width: 100%;
+}
+
+.glass-radio-group-2 input {
+  display: none;
+}
+
+.glass-radio-group-2 label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.8rem 1rem;
+  cursor: pointer;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: #475569;
+  position: relative;
+  z-index: 2;
+  transition: color 0.3s ease-in-out;
+  font-size: 0.85rem;
+}
+
+.glass-radio-group-2 label:hover {
+  color: #0f172a;
+}
+
+.glass-radio-group-2 input:checked + label {
+  color: #ffffff;
+}
+
+.glass-radio-group-2 .glass-glider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: calc(100% / 2);
+  border-radius: 1rem;
+  z-index: 1;
+  transition:
+    transform 0.5s cubic-bezier(0.37, 1.95, 0.66, 0.56),
+    background 0.4s ease-in-out,
+    box-shadow 0.4s ease-in-out;
+}
+
+#tts-native:checked ~ .glass-glider {
+  transform: translateX(0%);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.8), rgba(37, 99, 235, 1));
+  box-shadow:
+    0 0 18px rgba(59, 130, 246, 0.5),
+    0 0 10px rgba(96, 165, 250, 0.4) inset;
+}
+
+#tts-elevenlabs:checked ~ .glass-glider {
+  transform: translateX(100%);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.8), rgba(37, 99, 235, 1));
+  box-shadow:
+    0 0 18px rgba(59, 130, 246, 0.5),
+    0 0 10px rgba(96, 165, 250, 0.4) inset;
+}
+
+/* Animación de apertura tipo acordeón */
+@keyframes accordionOpen {
+  from {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+  }
+  to {
+    max-height: 400px;
+    opacity: 1;
+    overflow: hidden;
+  }
+}
+
+.accordion-open {
+  animation: accordionOpen 0.4s ease-out forwards;
+}
+
+@keyframes accordionClose {
+  from {
+    max-height: 400px;
+    opacity: 1;
+    overflow: hidden;
+  }
+  to {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+  }
+}
+
+.accordion-close {
+  animation: accordionClose 0.3s ease-in forwards;
+}

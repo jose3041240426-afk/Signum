@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { LiquidGlass } from "@/components/ui/LiquidGlass";
+import { ELEVENLABS_VOICES } from "@/services/tts.service";
 
 export default function AjustesPage() {
   const [isMirrored, setIsMirrored] = useState(true);
@@ -9,6 +10,11 @@ export default function AjustesPage() {
   const [ttsRate, setTtsRate] = useState(0.95);
   const [ttsPitch, setTtsPitch] = useState(1.0);
   const [glassOpacity, setGlassOpacity] = useState(0.05);
+  const [glassBorder, setGlassBorder] = useState(0);
+  const [ttsProvider, setTtsProvider] = useState("native");
+  const [elevenlabsVoiceId, setElevenlabsVoiceId] = useState("pNInz6obpgDQGcFmaJgB");
+  const [voiceListVisible, setVoiceListVisible] = useState(false);
+  const [voiceListAnimation, setVoiceListAnimation] = useState("");
   const [savedMessage, setSavedMessage] = useState("");
 
   // Load settings on mount
@@ -35,6 +41,17 @@ export default function AjustesPage() {
       } else {
         setGlassOpacity(0.05);
       }
+
+      const savedBorder = localStorage.getItem("glassBorder");
+      if (savedBorder) {
+        setGlassBorder(parseInt(savedBorder, 10));
+      }
+
+      const savedProvider = localStorage.getItem("ttsProvider");
+      if (savedProvider) setTtsProvider(savedProvider);
+
+      const savedVoiceId = localStorage.getItem("elevenlabsVoiceId");
+      if (savedVoiceId) setElevenlabsVoiceId(savedVoiceId);
     }
   }, []);
 
@@ -46,9 +63,13 @@ export default function AjustesPage() {
       localStorage.setItem("ttsRate", String(ttsRate));
       localStorage.setItem("ttsPitch", String(ttsPitch));
       localStorage.setItem("glassOpacity", String(glassOpacity));
+      localStorage.setItem("glassBorder", String(glassBorder));
+      localStorage.setItem("ttsProvider", ttsProvider);
+      localStorage.setItem("elevenlabsVoiceId", elevenlabsVoiceId);
 
       // Disparar evento para actualizar layout.tsx de inmediato en la misma pestaña
       window.dispatchEvent(new Event("glassOpacityChange"));
+      window.dispatchEvent(new Event("glassBorderChange"));
       
       setSavedMessage("¡Configuración guardada correctamente!");
       setTimeout(() => setSavedMessage(""), 3000);
@@ -62,6 +83,11 @@ export default function AjustesPage() {
     setTtsRate(0.95);
     setTtsPitch(1.0);
     setGlassOpacity(0.05);
+    setGlassBorder(0);
+    setTtsProvider("native");
+    setElevenlabsVoiceId("pNInz6obpgDQGcFmaJgB");
+    setVoiceListVisible(false);
+    setVoiceListAnimation("");
 
     if (typeof window !== "undefined") {
       localStorage.removeItem("isCameraMirrored");
@@ -70,9 +96,13 @@ export default function AjustesPage() {
       localStorage.removeItem("ttsRate");
       localStorage.removeItem("ttsPitch");
       localStorage.removeItem("glassOpacity");
+      localStorage.removeItem("glassBorder");
+      localStorage.removeItem("ttsProvider");
+      localStorage.removeItem("elevenlabsVoiceId");
 
       // Disparar evento para actualizar layout.tsx de inmediato en la misma pestaña
       window.dispatchEvent(new Event("glassOpacityChange"));
+      window.dispatchEvent(new Event("glassBorderChange"));
       
       setSavedMessage("Configuración restablecida a valores por defecto");
       setTimeout(() => setSavedMessage(""), 3000);
@@ -80,12 +110,19 @@ export default function AjustesPage() {
   };
 
   return (
-    <div style={{ maxWidth: "650px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+    <>
+      <style>{`
+        @keyframes alertSlideIn {
+          0% { opacity: 0; transform: translateY(-8px) scale(0.98); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      `}</style>
+    <div className="stagger" style={{ maxWidth: "650px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
       <div>
-        <h2 style={{ fontSize: "2rem", fontWeight: 800, margin: 0, background: "linear-gradient(to right, #fff, #93c5fd)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+        <h2 style={{ fontSize: "2rem", fontWeight: 800, margin: 0, color: "#ffffff" }}>
           Ajustes
         </h2>
-        <p style={{ fontSize: "0.9rem", opacity: 0.7, marginTop: "4px" }}>
+        <p style={{ fontSize: "0.9rem", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>
           Personaliza tu experiencia de traducción y voz en Signum
         </p>
       </div>
@@ -124,11 +161,11 @@ export default function AjustesPage() {
               </div>
               <input 
                 type="range" 
+                className="custom-slider"
                 min="30" 
                 max="95" 
                 value={autoAddConfidence}
                 onChange={(e) => setAutoAddConfidence(parseInt(e.target.value, 10))}
-                style={{ width: "100%", accentColor: "#3b82f6", cursor: "pointer" }}
               />
               <p style={{ margin: "4px 0 0 0", fontSize: "0.75rem", opacity: 0.6 }}>Precisión requerida del modelo para registrar una seña.</p>
             </div>
@@ -140,11 +177,11 @@ export default function AjustesPage() {
               </div>
               <input 
                 type="range" 
+                className="custom-slider"
                 min="2" 
                 max="20" 
                 value={autoAddStableFrames}
                 onChange={(e) => setAutoAddStableFrames(parseInt(e.target.value, 10))}
-                style={{ width: "100%", accentColor: "#3b82f6", cursor: "pointer" }}
               />
               <p style={{ margin: "4px 0 0 0", fontSize: "0.75rem", opacity: 0.6 }}>Frames consecutivos que la seña debe mantenerse para auto-añadirse.</p>
             </div>
@@ -164,12 +201,12 @@ export default function AjustesPage() {
               </div>
               <input 
                 type="range" 
+                className="custom-slider"
                 min="0.5" 
                 max="2" 
                 step="0.05"
                 value={ttsRate}
                 onChange={(e) => setTtsRate(parseFloat(e.target.value))}
-                style={{ width: "100%", accentColor: "#10b981", cursor: "pointer" }}
               />
             </div>
 
@@ -180,14 +217,84 @@ export default function AjustesPage() {
               </div>
               <input 
                 type="range" 
+                className="custom-slider"
                 min="0.5" 
                 max="2" 
                 step="0.05"
                 value={ttsPitch}
                 onChange={(e) => setTtsPitch(parseFloat(e.target.value))}
-                style={{ width: "100%", accentColor: "#10b981", cursor: "pointer" }}
               />
             </div>
+
+            {/* Proveedor TTS estilo glass-radio */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>Motor de Voz</span>
+                <span style={{ fontSize: "0.8rem", opacity: 0.7 }}>Por defecto: Navegador</span>
+              </div>
+              <div className="glass-radio-group-2">
+                <input
+                  type="radio"
+                  name="tts-provider"
+                  id="tts-native"
+                  checked={ttsProvider === "native"}
+                  onChange={() => {
+                    if (voiceListVisible) {
+                      setVoiceListAnimation("accordion-close");
+                    }
+                    setTtsProvider("native");
+                  }}
+                />
+                <label htmlFor="tts-native">Navegador</label>
+
+                <input
+                  type="radio"
+                  name="tts-provider"
+                  id="tts-elevenlabs"
+                  checked={ttsProvider === "elevenlabs"}
+                  onChange={() => {
+                    setTtsProvider("elevenlabs");
+                    setVoiceListVisible(true);
+                    setVoiceListAnimation("accordion-open");
+                  }}
+                />
+                <label htmlFor="tts-elevenlabs">ElevenLabs</label>
+
+                <div className="glass-glider" />
+              </div>
+            </div>
+
+            {/* Selector de voz ElevenLabs */}
+            {voiceListVisible && (
+              <div
+                className={voiceListAnimation}
+                onAnimationEnd={() => {
+                  if (voiceListAnimation === "accordion-close") {
+                    setVoiceListVisible(false);
+                    setVoiceListAnimation("");
+                  }
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                  <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>Voz ElevenLabs</span>
+                  <span style={{ fontSize: "0.8rem", opacity: 0.7 }}>Modelo multilingüe</span>
+                </div>
+                <p style={{ margin: "0 0 8px 0", fontSize: "0.75rem", opacity: 0.6 }}>
+                  Voces con "(recomendado español)" se adaptan mejor al español latino con el modelo multilingüe.
+                </p>
+                <div className="voice-list">
+                  {Object.entries(ELEVENLABS_VOICES).map(([id, name]) => (
+                    <button
+                      key={id}
+                      className={`voice-option${id === elevenlabsVoiceId ? " selected" : ""}`}
+                      onClick={() => setElevenlabsVoiceId(id)}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -204,20 +311,67 @@ export default function AjustesPage() {
               </div>
               <input 
                 type="range" 
+                className="custom-slider"
                 min="0.05" 
                 max="0.95" 
                 step="0.05"
                 value={glassOpacity}
-                onChange={(e) => setGlassOpacity(parseFloat(e.target.value))}
-                style={{ width: "100%", accentColor: "#f59e0b", cursor: "pointer" }}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  setGlassOpacity(v);
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("glassOpacity", String(v));
+                  }
+                }}
+                onPointerUp={() => {
+                  window.dispatchEvent(new Event("glassOpacityChange"));
+                }}
               />
               <p style={{ margin: "4px 0 0 0", fontSize: "0.75rem", opacity: 0.6 }}>Ajusta la opacidad del efecto de vidrio esmerilado en los paneles.</p>
+            </div>
+
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>Grosor del Borde: {glassBorder}px</span>
+                <span style={{ fontSize: "0.8rem", opacity: 0.7 }}>Por defecto: 0px</span>
+              </div>
+              <input
+                type="range"
+                className="custom-slider"
+                min="0"
+                max="10"
+                step="1"
+                value={glassBorder}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  setGlassBorder(v);
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("glassBorder", String(v));
+                  }
+                }}
+                onPointerUp={() => {
+                  window.dispatchEvent(new Event("glassBorderChange"));
+                }}
+              />
+              <p style={{ margin: "4px 0 0 0", fontSize: "0.75rem", opacity: 0.6 }}>Controla el grosor del borde de los paneles de vidrio.</p>
             </div>
           </div>
         </div>
 
         {savedMessage && (
-          <div style={{ padding: "10px", borderRadius: "8px", background: "rgba(16,185,129,0.2)", color: "#a7f3d0", fontSize: "0.85rem", textAlign: "center", border: "1px solid rgba(16,185,129,0.3)" }}>
+          <div
+            style={{
+              padding: "12px 16px",
+              borderRadius: "10px",
+              background: "rgba(16,185,129,0.25)",
+              color: "#065f46",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              textAlign: "center",
+              border: "1px solid rgba(16,185,129,0.4)",
+              animation: "alertSlideIn 0.4s ease",
+            }}
+          >
             {savedMessage}
           </div>
         )}
@@ -259,5 +413,6 @@ export default function AjustesPage() {
 
       </LiquidGlass>
     </div>
+    </>
   );
 }

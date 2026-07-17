@@ -48,7 +48,7 @@ export function ProfileScreen({ userId }: ProfileScreenProps) {
         setIdGenero(profData.id_genero || 1);
       } catch (err: any) {
         console.error("Error al cargar perfil:", err);
-        setError("Ocurrió un error al cargar los datos del perfil.");
+        setError(err?.message || err?.error_description || "Ocurrió un error al cargar los datos del perfil.");
       } finally {
         setLoading(false);
       }
@@ -131,8 +131,11 @@ export function ProfileScreen({ userId }: ProfileScreenProps) {
   if (loading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", padding: "4rem" }}>
-        <div style={{ border: "4px solid rgba(255,255,255,0.1)", borderTop: "4px solid #fff", borderRadius: "50%", width: "40px", height: "40px", animation: "spin 1s linear infinite" }} />
-        <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
+        <span className="ai-loader">
+          <span className="bar" />
+          <span className="bar" />
+          <span className="bar" />
+        </span>
       </div>
     );
   }
@@ -142,10 +145,10 @@ export function ProfileScreen({ userId }: ProfileScreenProps) {
       <LiquidGlass style={{ padding: "2.5rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "1.5rem" }}>
           <div>
-            <h2 style={{ fontSize: "2rem", fontWeight: 800, margin: 0, background: "linear-gradient(to right, #fff, #93c5fd)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+            <h2 style={{ fontSize: "2rem", fontWeight: 800, margin: 0, color: "#ffffff" }}>
               Mi Perfil
             </h2>
-            <p style={{ fontSize: "0.9rem", opacity: 0.7, marginTop: "4px" }}>
+            <p style={{ fontSize: "0.9rem", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>
               Administra tu información personal de Signum
             </p>
           </div>
@@ -183,7 +186,7 @@ export function ProfileScreen({ userId }: ProfileScreenProps) {
         )}
 
         {isEditing ? (
-          <form onSubmit={handleSave} style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+          <form onSubmit={handleSave} className="animate-fade-in" style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
               <div>
                 <label style={{ display: "block", fontSize: "0.85rem", marginBottom: "6px", opacity: 0.8, fontWeight: 600 }}>Nombre</label>
@@ -268,7 +271,7 @@ export function ProfileScreen({ userId }: ProfileScreenProps) {
             </div>
           </form>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+          <div className="stagger" style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.5rem" }}>
               <div>
                 <p style={{ margin: 0, fontSize: "0.8rem", opacity: 0.6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "1px" }}>Nombre Completo</p>

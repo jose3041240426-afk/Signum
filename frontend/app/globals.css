@@ -18,6 +18,7 @@ body {
   color: var(--foreground);
   font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
   background-color: transparent;
+  text-shadow: var(--text-shadow, none);
 }
 
 html {

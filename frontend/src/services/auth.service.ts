@@ -21,8 +21,11 @@ export async function signUp(
     },
   });
 
+  console.log("[signUp] authData:", JSON.stringify(authData));
+  console.log("[signUp] authError:", authError);
+
   if (authError) throw authError;
-  if (!authData.user) throw new Error("No se pudo crear el usuario");
+  if (!authData.user) throw new Error("No se pudo crear el usuario. Verifica que el correo SMTP esté bien configurado.");
 
   return authData;
 }
@@ -89,8 +92,9 @@ export async function getUserProfile(userId: string) {
     .from("usuarios")
     .select("*, catalogo_generos(genero)")
     .eq("id_usuario", userId)
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error("No se encontró el perfil del usuario. Es posible que la cuenta no tenga un registro en la base de datos.");
   return data;
 }
 
@@ -149,17 +153,19 @@ export async function getUserLogins(userId: string, limit: number = 10) {
   return data;
 }
 
-export async function recordTranslation(userId: string, id_tipo: number, texto_original: string, texto_traducido: string) {
-  // 1. Insertar la traducción
+export async function recordTranslation(userId: string, id_tipo: number, texto_original: string, texto_traducido: string, precision: number = 0) {
+  // 1. Insertar la traducción con su precisión
   const { error: transError } = await supabase.from("traducciones").insert({
     id_usuario: userId,
     id_tipo,
     texto_original,
     texto_traducido,
+    precision,
   });
+
   if (transError) throw transError;
 
-  // 2. Actualizar avances (traducciones_realizadas)
+  // 2. Actualizar avances (traducciones_realizadas + precision_promedio)
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
   
   // Buscar si ya existe un registro de hoy
@@ -177,18 +183,64 @@ export async function recordTranslation(userId: string, id_tipo: number, texto_o
 
   if (!avanceData) {
     // Insertar nuevo registro
-    await supabase.from("avances").insert({
+    const { error: insertError } = await supabase.from("avances").insert({
       id_usuario: userId,
       fecha: today,
       traducciones_realizadas: 1,
-      tiempo_uso_minutos: 0
+      tiempo_uso_minutos: 0,
+      precision_promedio: precision
     });
+    if (insertError) throw insertError;
   } else {
+    // Calcular nuevo promedio de precisión
+    const currentCount = avanceData.traducciones_realizadas || 0;
+    const currentAvg = avanceData.precision_promedio || 0;
+    const newAvg = Math.round(((currentAvg * currentCount + precision) / (currentCount + 1)) * 10) / 10;
+
     // Actualizar registro existente
-    await supabase.from("avances").update({
-      traducciones_realizadas: (avanceData.traducciones_realizadas || 0) + 1
+    const { error: updateError } = await supabase.from("avances").update({
+      traducciones_realizadas: currentCount + 1,
+      precision_promedio: newAvg
     }).eq("id_avance", avanceData.id_avance);
+
+    if (updateError) throw updateError;
   }
+}
+
+export interface EvaluacionData {
+  resolucion: string;
+  iluminacion: string;
+  distancia: string;
+  p4_uso_frecuente: number | null;
+  p5_complicado: number | null;
+  p6_facil_interactuar: number | null;
+  p7_necesita_ayuda: number | null;
+  p8_traduccion_natural: number | null;
+  voz_satisfaccion: number | null;
+  esfuerzo_mental: string;
+  dispositivo: string;
+  navegador: string;
+  experiencia_previa: string;
+  problemas: string;
+  sugerencias: string;
+  experiencia_general: number | null;
+  recomendaria: string;
+  facil_aprender: number | null;
+  util_educativo: number | null;
+  funcion_mas_util: string;
+  senas_dificiles: string;
+}
+
+export async function saveEvaluation(data: EvaluacionData) {
+  const { data: user, error: userError } = await supabase.auth.getUser();
+  if (userError) console.error("[evaluacion] Error getting user:", userError);
+
+  const { error } = await supabase.from("evaluaciones").insert({
+    id_usuario: user?.user?.id || null,
+    ...data,
+  });
+
+  if (error) throw error;
 }
 
 export async function recordActiveTime(userId: string, minutesToAdd: number = 1) {
@@ -217,4 +269,13 @@ export async function recordActiveTime(userId: string, minutesToAdd: number = 1)
       tiempo_uso_minutos: (avanceData.tiempo_uso_minutos || 0) + minutesToAdd
     }).eq("id_avance", avanceData.id_avance);
   }
+}
+
+export async function getAllEvaluaciones() {
+  const { data, error } = await supabase
+    .from("evaluaciones")
+    .select("*, usuarios(nombre, apellido_paterno, apellido_materno)")
+    .order("fecha", { ascending: false });
+  if (error) throw error;
+  return data;
 }

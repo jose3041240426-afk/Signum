@@ -79,6 +79,7 @@ export function useLivePrediction(
 ) {
   const [data, setData] = useState<LivePredictionData>(DEFAULT_PREDICTION);
   const [cameraOn, setCameraOn] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const modeRef = useRef(mode);
@@ -567,6 +568,7 @@ export function useLivePrediction(
         return;
       }
       streamRef.current = stream;
+      setCameraError(null);
 
       initMediaPipe(
         videoEl,
@@ -581,9 +583,20 @@ export function useLivePrediction(
         console.error("[Signum] initMediaPipe failed:", error);
         if (mounted) setData((prev) => ({ ...prev, mediapipeReady: false }));
       });
-    }).catch(() => {
-      console.error("[Signum] Permiso de camara denegado");
-      if (mounted) setCameraOn(false);
+    }).catch((err) => {
+      console.error("[Signum] Permiso de camara denegado:", err);
+      if (mounted) {
+        setCameraOn(false);
+        if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
+          setCameraError("Bloqueaste el acceso a la camara. Haz clic en el icono de camara en la barra del navegador y permite el acceso, luego recarga la pagina.");
+        } else if (err?.name === "NotFoundError" || err?.name === "DevicesNotFoundError") {
+          setCameraError("No se encontro ninguna camara conectada al dispositivo.");
+        } else if (err?.name === "NotReadableError") {
+          setCameraError("La camara esta siendo usada por otra aplicacion. Cierrala e intenta de nuevo.");
+        } else {
+          setCameraError("No se pudo acceder a la camara. Verifica los permisos e intenta de nuevo.");
+        }
+      }
     });
 
     return () => {
@@ -807,6 +820,7 @@ export function useLivePrediction(
   return {
     data,
     cameraOn,
+    cameraError,
     toggleCamera,
     videoRef,
     canvasRef,

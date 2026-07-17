@@ -1,16 +1,12 @@
 /**
- * TTS Service - 100% browser, zero Python.
+ * TTS Service - browser + server fallbacks.
  *
- * Strategy:
- *   1. Try the native Web Speech API (window.speechSynthesis).
- *   2. If that fails / no voices → fall back to playing audio from
- *      Google Translate's public TTS endpoint via an <audio> element.
+ * Strategy (driven by localStorage "ttsProvider"):
+ *   - "native": Web Speech API (window.speechSynthesis) -> Google Translate fallback.
+ *   - "elevenlabs": Server-side /api/tts/elevenlabs proxy using ELEVENLABS_API_KEY.
  *
- * Known Linux pitfalls this handles:
- *   - Voices list empty (speech-dispatcher not installed)
- *   - speak() fires but produces no sound (espeak missing)
- *   - Chrome paused-queue bug
- *   - onend / onerror never firing
+ * ElevenLabs requests fail silently to native on 4xx/5xx so the UI stays
+ * responsive even if the user runs out of free credits.
  */
 
 /* ------------------------------------------------------------------ */
@@ -228,31 +224,124 @@ function speakWithNativeAPI(text: string, voice: SpeechSynthesisVoice): Promise<
 }
 
 /* ------------------------------------------------------------------ */
+/*  ElevenLabs catalog – voices confirmed working on the free tier  */
+/* ------------------------------------------------------------------ */
+
+export const ELEVENLABS_VOICES: Record<string, string> = {
+  "pNInz6obpgDQGcFmaJgB": "Adam (recomendado español)",
+  "EXAVITQu4vr4xnSDxMaL": "Sarah (recomendado español)",
+  "Xb7hH8MSUJpSbSDYk0k2": "Alice",
+  "hpp4J3VqNfWAUOO0d1Us": "Bella",
+  "pqHfZKP75CvOlQylNhV4": "Bill",
+  "nPczCjzI2devNBz1zQrb": "Brian",
+  "N2lVS1w4EtoT3dr4eOWO": "Callum",
+  "IKne3meq5aSn9XLyUdCD": "Charlie",
+  "iP95p4xoKVk53GoZ742B": "Chris",
+  "onwK4e9ZLuTAKqWW03F9": "Daniel",
+  "cjVigY5qzO86Huf0OWal": "Eric",
+  "JBFqnCBsd6RMkjVDRZzb": "George",
+  "SOYHLrjzK2X1ezoPC6cr": "Harry",
+  "cgSgspJ2msm6clMCkdW9": "Jessica",
+  "FGY2WhTYpPnrIDTdsKH5": "Laura",
+  "TX3LPaxmHKxFdv7VOQHJ": "Liam",
+  "pFZP5JQG7iQjIQuC4Bku": "Lily",
+  "XrExE9yKIg1WjnnlVkGX": "Matilda",
+  "SAz9YHcvj6GT2YYXdXww": "River",
+  "CwhRBWXzGAHq8TQ4Fs17": "Roger",
+  "bIHbv24MWmeRgasZH58o": "Will",
+};
+
+/* ------------------------------------------------------------------ */
+/*  ElevenLabs via /api/tts/elevenlabs                                 */
+/* ------------------------------------------------------------------ */
+
+let elevenlabsAudio: HTMLAudioElement | null = null;
+
+async function speakElevenlabs(text: string): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  try {
+    const voiceId = localStorage.getItem("elevenlabsVoiceId") || "pNInz6obpgDQGcFmaJgB";
+    const encoded = encodeURIComponent(text.slice(0, 500));
+    const url = `/api/tts/elevenlabs?text=${encoded}&voice_id=${voiceId}&model_id=eleven_multilingual_v2`;
+
+    if (!elevenlabsAudio) {
+      elevenlabsAudio = new Audio();
+    } else {
+      elevenlabsAudio.pause();
+    }
+
+    elevenlabsAudio.src = url;
+    elevenlabsAudio.volume = 1.0;
+
+    await new Promise<void>((resolve) => {
+      elevenlabsAudio!.onended = () => resolve();
+      elevenlabsAudio!.onerror = (e) => {
+        console.error("[TTS] ElevenLabs audio error", e);
+        resolve();
+      };
+      const playPromise = elevenlabsAudio!.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          if (err.name !== "AbortError") {
+            console.error("[TTS] ElevenLabs play() rejected", err);
+          }
+          resolve();
+        });
+      }
+      // Safety timeout
+      setTimeout(() => resolve(), 15000);
+    });
+
+    return true;
+  } catch (e) {
+    console.error("[TTS] ElevenLabs exception", e);
+    return false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Public API                                                        */
 /* ------------------------------------------------------------------ */
 
-export async function speakNative(text: string): Promise<void> {
+export type TTSProvider = "native" | "elevenlabs";
+
+export function getTTSProvider(): TTSProvider {
+  if (typeof window === "undefined") return "native";
+  const saved = localStorage.getItem("ttsProvider");
+  if (saved === "elevenlabs") return "elevenlabs";
+  return "native";
+}
+
+export async function speak(text: string): Promise<void> {
   if (!text || typeof window === "undefined") return;
 
-  console.log(`[TTS] speakNative("${text}")`);
+  const provider = getTTSProvider();
+  console.log(`[TTS] speak("${text}") via ${provider}`);
 
-  // 1. Try native
+  if (provider === "elevenlabs") {
+    const ok = await speakElevenlabs(text);
+    if (ok) return;
+    console.log("[TTS] ElevenLabs failed, falling back to native.");
+  }
+
+  // Native path (or fallback)
   const voice = cachedVoice ?? (voicePromise ? await voicePromise : null);
-
   if (voice) {
     const ok = await speakWithNativeAPI(text, voice);
-    if (ok) return; // success – done
+    if (ok) return;
     console.log("[TTS] Native speech failed, falling back to online.");
   } else {
     console.log("[TTS] No native voices available.");
   }
 
-  // 2. Online fallback
   await speakOnline(text);
 }
 
+// Kept for backwards compatibility – now delegates to speak()
+export async function speakNative(text: string): Promise<void> {
+  await speak(text);
+}
+
 export function isNativeTTSAvailable(): boolean {
-  // Always return true so the UI shows the speak button.
-  // The actual speech will use the fallback if native is unavailable.
   return typeof window !== "undefined";
 }

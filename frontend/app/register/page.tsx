@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { signUp, getGeneros } from "@/services/auth.service";
+import { signUp, getGeneros, getCurrentUser } from "@/services/auth.service";
 
 type Genero = { id_genero: number; genero: string };
 
@@ -18,8 +18,13 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    getCurrentUser().then((user) => {
+      if (user) {
+        router.push("/app");
+      }
+    }).catch(console.error);
     getGeneros().then(setGeneros).catch(console.error);
-  }, []);
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,7 +38,8 @@ export default function RegisterPage() {
       await signUp(email, password, nombre, apellidoPaterno, apellidoMaterno, Number(idGenero));
       router.push("/login");
     } catch (err: any) {
-      setError(err.message || "Error al registrarse");
+      console.error("Error en registro:", err);
+      setError(err?.message || JSON.stringify(err) || "Error al registrarse");
     } finally {
       setLoading(false);
     }
@@ -70,6 +76,7 @@ export default function RegisterPage() {
       }}
     >
       <div
+        className="stagger"
         style={{
           background: "rgba(255,255,255,0.08)",
           backdropFilter: "blur(16px)",
